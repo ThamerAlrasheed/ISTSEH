@@ -1,53 +1,62 @@
 import SwiftUI
+import FirebaseAuth
+import FirebaseFirestore
 
-/// A 2‑step sign up:
+/// 2-step Sign Up:
 /// 1) Email + Password + Confirm Password
-/// 2) First/Last name + Date of Birth + (optional) meals/sleep routine.
-///
-/// On completion, we persist basics & optional routine to AppSettings and flip the
-/// app flow flags so RootView switches to the main app (no back to auth).
+/// 2) First/Last name, Date of Birth (labeled), optional meal/sleep routine.
+/// - Uses Firebase Auth to create the account
+/// - Stores profile in Firestore (/users/{uid})
+/// - On success, flips AppSettings so RootView shows the main app (no back navigation)
 struct SignUpPageView: View {
     @EnvironmentObject var settings: AppSettings
 
     // MARK: - Step Control
-    @State private var step: Int = 1
+    @State private var step = 1
 
     // MARK: - Step 1 (Auth)
-    @State private var email: String = ""
-    @State private var password: String = ""
-    @State private var confirmPassword: String = ""
+    @State private var email = ""
+    @State private var password = ""
+    @State private var confirmPassword = ""
     @FocusState private var focusedAuth: AuthField?
 
     // MARK: - Step 2 (Profile + Routine)
-    @State private var firstName: String = ""
-    @State private var lastName: String = ""
-    @State private var dateOfBirth: Date = Calendar.current.date(byAdding: .year, value: -18, to: Date()) ?? Date()
+    @State private var firstName = ""
+    @State private var lastName = ""
+    @State private var dob = Calendar.current.date(byAdding: .year, value: -18, to: Date()) ?? Date()
     @FocusState private var focusedProfile: ProfileField?
 
     // Optional routine
-    @State private var setRoutineNow: Bool = false
-    @State private var breakfast: DateComponents = .init(hour: 8,  minute: 0)
-    @State private var lunch:     DateComponents = .init(hour: 13, minute: 0)
-    @State private var dinner:    DateComponents = .init(hour: 19, minute: 0)
-    @State private var bedtime:   DateComponents = .init(hour: 23, minute: 0)
-    @State private var wakeup:    DateComponents = .init(hour: 7,  minute: 0)
+    @State private var setRoutineNow = false
+    @State private var breakfast = DateComponents(hour: 8,  minute: 0)
+    @State private var lunch     = DateComponents(hour: 13, minute: 0)
+    @State private var dinner    = DateComponents(hour: 19, minute: 0)
+    @State private var bedtime   = DateComponents(hour: 23, minute: 0)
+    @State private var wakeup    = DateComponents(hour: 7,  minute: 0)
+
+    // MARK: - UX State
+    @State private var isLoading = false
+    @State private var alertTitle = ""
+    @State private var alertMessage = ""
+    @State private var showAlert = false
 
     enum AuthField { case email, password, confirm }
     enum ProfileField { case first, last }
 
     // MARK: - Validation
-    private var authValid: Bool {
+    private var emailValid: Bool {
         let e = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !e.isEmpty && password.count >= 6 && password == confirmPassword
+        return e.contains("@") && e.contains(".")
     }
+    private var passwordStrongEnough: Bool { password.count >= 6 }
+    private var passwordsMatch: Bool { confirmPassword.isEmpty || password == confirmPassword }
+    private var authValid: Bool { emailValid && passwordStrongEnough && (password == confirmPassword) }
 
     private var profileValid: Bool {
         !firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         !lastName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        // dateOfBirth is always present (DatePicker), so no extra check required
     }
 
-    // MARK: - Body
     var body: some View {
         NavigationStack {
             ZStack {
@@ -57,30 +66,42 @@ struct SignUpPageView: View {
                 )
                 .ignoresSafeArea()
 
-                VStack(spacing: 24) {
-                    header
+                ScrollView {
+                    VStack(spacing: 24) {
+                        header
 
-                    if step == 1 {
-                        authCard
-                        continueButton
-                        alreadyHaveAccountLink
-                    } else {
-                        profileCard
-                        routineOptionalCard
-                        createAccountButton
-                        backToStepOneButton
+                        if step == 1 {
+                            authCard
+                            continueButton
+                            alreadyHaveAccountLink
+                        } else {
+                            profileCard
+                            routineOptionalCard
+                            createAccountButton
+                            backToStepOneButton
+                        }
+
+                        Spacer(minLength: 16)
                     }
-
-                    Spacer(minLength: 0)
+                    .padding(.top, 24)
                 }
-                .padding(.top)
-                .animation(.easeInOut, value: step)
+
+                if isLoading {
+                    Color.black.opacity(0.15).ignoresSafeArea()
+                    ProgressView("Creating your account…")
+                        .padding()
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                }
             }
         }
-        // We never want a nav back button here; the flow is controlled within this view.
         .navigationBarBackButtonHidden(true)
+        .alert(alertTitle, isPresented: $showAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(alertMessage)
+        }
         .onAppear {
-            // Seed routine from settings if available (nice default if user toggles the option)
+            // Seed routine from settings so the toggle shows user's defaults if opened
             breakfast = settings.breakfast
             lunch     = settings.lunch
             dinner    = settings.dinner
@@ -100,12 +121,11 @@ struct SignUpPageView: View {
             Text(step == 1 ? "Create your account" : "A few more details")
                 .font(.largeTitle).bold()
         }
-        .padding(.bottom, 8)
     }
 
     // MARK: - Step 1 UI
     private var authCard: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 14) {
             InputRow(
                 systemImage: "envelope",
                 placeholder: "Email",
@@ -120,6 +140,10 @@ struct SignUpPageView: View {
             .autocorrectionDisabled()
             .foregroundStyle(.green)
 
+            if !email.isEmpty && !emailValid {
+                InlineError("Please enter a valid email address.")
+            }
+
             InputRow(
                 systemImage: "lock",
                 placeholder: "Password (min 6 chars)",
@@ -130,6 +154,10 @@ struct SignUpPageView: View {
             .focused($focusedAuth, equals: .password)
             .textContentType(.newPassword)
             .foregroundStyle(.green)
+
+            if !password.isEmpty && !passwordStrongEnough {
+                InlineError("Password must be at least 6 characters.")
+            }
 
             InputRow(
                 systemImage: "lock.rotation",
@@ -142,12 +170,8 @@ struct SignUpPageView: View {
             .textContentType(.newPassword)
             .foregroundStyle(.green)
 
-            if !confirmPassword.isEmpty && password != confirmPassword {
-                Text("Passwords don’t match")
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 4)
+            if !passwordsMatch {
+                InlineError("Passwords don’t match.")
             }
         }
         .padding(18)
@@ -167,7 +191,7 @@ struct SignUpPageView: View {
                 .font(.headline)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 16)
-                .background(authValid ? Color.accentColor : Color.accentColor.opacity(0.5))
+                .background(authValid ? Color.green : Color.green.opacity(0.5))
                 .foregroundColor(.white)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .shadow(radius: 8, y: 6)
@@ -211,7 +235,7 @@ struct SignUpPageView: View {
             .textContentType(.familyName)
             .foregroundStyle(.green)
 
-            // Date of birth with explicit label so it's 100% clear
+            // DOB with explicit label
             VStack(alignment: .leading, spacing: 6) {
                 Text("Date of birth")
                     .font(.subheadline)
@@ -222,7 +246,7 @@ struct SignUpPageView: View {
                         .foregroundStyle(.secondary)
                     DatePicker(
                         "Date of birth",
-                        selection: $dateOfBirth,
+                        selection: $dob,
                         in: ...Date(),
                         displayedComponents: .date
                     )
@@ -278,7 +302,7 @@ struct SignUpPageView: View {
                 .font(.headline)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 16)
-                .background(profileValid ? Color.accentColor : Color.accentColor.opacity(0.5))
+                .background(profileValid ? Color.green : Color.green.opacity(0.5))
                 .foregroundColor(.white)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .shadow(radius: 8, y: 6)
@@ -298,32 +322,73 @@ struct SignUpPageView: View {
         .padding(.top, 2)
     }
 
-    // MARK: - Actions
+    // MARK: - Actions (Firebase)
     private func completeSignUp() {
-        // TODO: Integrate your real sign-up using (email, password).
-        // If API succeeds, persist profile + optional routine to settings:
+        let emailTrimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        settings.firstName = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
-        settings.lastName  = lastName.trimmingCharacters(in: .whitespacesAndNewlines)
-        settings.dateOfBirth = dateOfBirth
+        isLoading = true
+        Auth.auth().createUser(withEmail: emailTrimmed, password: password) { result, error in
+            if let error = error {
+                isLoading = false
+                presentError("Sign up failed", error.localizedDescription)
+                return
+            }
+            guard let uid = result?.user.uid else {
+                isLoading = false
+                presentError("Sign up failed", "Could not get user ID.")
+                return
+            }
 
-        if setRoutineNow {
-            settings.breakfast = breakfast
-            settings.lunch     = lunch
-            settings.dinner    = dinner
-            settings.bedtime   = bedtime
-            settings.wakeup    = wakeup
+            let db = Firestore.firestore()
+            let doc: [String: Any] = [
+                "firstName": firstName.trimmingCharacters(in: .whitespacesAndNewlines),
+                "lastName":  lastName.trimmingCharacters(in: .whitespacesAndNewlines),
+                "dateOfBirth": Timestamp(date: dob),
+                "routine": [
+                    "breakfast": ["hour": breakfast.hour ?? 8, "minute": breakfast.minute ?? 0],
+                    "lunch":     ["hour": lunch.hour ?? 13,     "minute": lunch.minute ?? 0],
+                    "dinner":    ["hour": dinner.hour ?? 19,    "minute": dinner.minute ?? 0],
+                    "bedtime":   ["hour": bedtime.hour ?? 23,   "minute": bedtime.minute ?? 0],
+                    "wakeup":    ["hour": wakeup.hour ?? 7,     "minute": wakeup.minute ?? 0],
+                ],
+                "createdAt": FieldValue.serverTimestamp()
+            ]
+
+            db.collection("users").document(uid).setData(doc) { err in
+                isLoading = false
+                if let err = err {
+                    presentError("Couldn’t save profile", err.localizedDescription)
+                    return
+                }
+
+                // Mirror to local settings for immediate UI usage
+                settings.firstName = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
+                settings.lastName  = lastName.trimmingCharacters(in: .whitespacesAndNewlines)
+                settings.dateOfBirth = dob
+                if setRoutineNow {
+                    settings.breakfast = breakfast
+                    settings.lunch     = lunch
+                    settings.dinner    = dinner
+                    settings.bedtime   = bedtime
+                    settings.wakeup    = wakeup
+                }
+
+                // Send user into the main app (RootView will also react to Auth state)
+                settings.didChooseEntry = true
+                settings.onboardingCompleted = true
+            }
         }
+    }
 
-        // Enter the app immediately (no back to auth)
-        settings.didChooseEntry = true
-        settings.onboardingCompleted = true
+    private func presentError(_ title: String, _ message: String) {
+        alertTitle = title
+        alertMessage = message
+        showAlert = true
     }
 }
 
-// MARK: - Reusable Rows
+// MARK: - Small reusable views
 
-/// Generic text field row used in both steps.
 private struct InputRow: View {
     let systemImage: String
     let placeholder: String
@@ -351,9 +416,25 @@ private struct InputRow: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(isFocused ? Color.accentColor : Color.primary.opacity(0.08),
+                .strokeBorder(isFocused ? Color.green : Color.primary.opacity(0.08),
                               lineWidth: isFocused ? 1.5 : 1)
         )
+    }
+}
+
+private struct InlineError: View {
+    let message: String
+    init(_ message: String) { self.message = message }
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .imageScale(.small)
+            Text(message)
+        }
+        .font(.footnote)
+        .foregroundStyle(.red)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 4)
     }
 }
 
@@ -366,6 +447,7 @@ private struct RoutineRow: View {
         HStack {
             Text(title)
                 .frame(width: 100, alignment: .leading)
+
             DatePicker(
                 "",
                 selection: Binding<Date>(

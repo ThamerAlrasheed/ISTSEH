@@ -1,8 +1,8 @@
 //
 //  ContentView.swift
-//  MEDSAI
+//  MedAi
 //
-//  Created by Mac on 15/08/2025.
+//  Created by Mac on 11/08/2025.
 //
 
 import SwiftUI

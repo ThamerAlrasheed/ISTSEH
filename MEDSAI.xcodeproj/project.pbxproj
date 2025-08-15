@@ -35,16 +35,6 @@
 			path = MEDSAI;
 			sourceTree = "<group>";
 		};
-		040BD0E42E4F8D9700E44F60 /* MEDSAITests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = MEDSAITests;
-			sourceTree = "<group>";
-		};
-		040BD0EE2E4F8D9700E44F60 /* MEDSAIUITests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = MEDSAIUITests;
-			sourceTree = "<group>";
-		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -76,8 +66,6 @@
 			isa = PBXGroup;
 			children = (
 				040BD0D42E4F8D9500E44F60 /* MEDSAI */,
-				040BD0E42E4F8D9700E44F60 /* MEDSAITests */,
-				040BD0EE2E4F8D9700E44F60 /* MEDSAIUITests */,
 				040BD0D32E4F8D9500E44F60 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -130,9 +118,6 @@
 			dependencies = (
 				040BD0E32E4F8D9700E44F60 /* PBXTargetDependency */,
 			);
-			fileSystemSynchronizedGroups = (
-				040BD0E42E4F8D9700E44F60 /* MEDSAITests */,
-			);
 			name = MEDSAITests;
 			packageProductDependencies = (
 			);
@@ -153,9 +138,6 @@
 			dependencies = (
 				040BD0ED2E4F8D9700E44F60 /* PBXTargetDependency */,
 			);
-			fileSystemSynchronizedGroups = (
-				040BD0EE2E4F8D9700E44F60 /* MEDSAIUITests */,
-			);
 			name = MEDSAIUITests;
 			packageProductDependencies = (
 			);
@@ -175,6 +157,7 @@
 				TargetAttributes = {
 					040BD0D12E4F8D9500E44F60 = {
 						CreatedOnToolsVersion = 16.4;
+						LastSwiftMigration = 1640;
 					};
 					040BD0E02E4F8D9700E44F60 = {
 						CreatedOnToolsVersion = 16.4;
@@ -395,6 +378,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 48389DB5RF;
@@ -413,6 +397,8 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.yourname.MedAi.MEDSAI;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "MEDSAI/MEDSAI-Bridging-Header.h";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -423,6 +409,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 48389DB5RF;
@@ -441,6 +428,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.yourname.MedAi.MEDSAI;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "MEDSAI/MEDSAI-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};

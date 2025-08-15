@@ -1,9 +1,3 @@
-//
-//  Item.swift
-//  MEDSAI
-//
-//  Created by Mac on 15/08/2025.
-//
 
 import Foundation
 import SwiftData

@@ -1,35 +1,29 @@
 import SwiftUI
 
 struct LoginPageView: View {
+    @EnvironmentObject var settings: AppSettings
+
     @State private var email: String = ""
     @State private var password: String = ""
     @FocusState private var focusedField: Field?
-    @State private var goNext = false
 
     enum Field { case email, password }
 
     var isValid: Bool {
-        // super basic validation; tweak as you like
         !email.trimmingCharacters(in: .whitespaces).isEmpty &&
         !password.isEmpty
     }
 
     var body: some View {
         ZStack {
-            // subtle gradient background
             LinearGradient(
-                gradient: Gradient(colors: [
-                    Color(.systemBackground),
-                    Color(.secondarySystemBackground)
-                ]),
-                startPoint: .top,
-                endPoint: .bottom
+                gradient: Gradient(colors: [Color(.systemBackground), Color(.secondarySystemBackground)]),
+                startPoint: .top, endPoint: .bottom
             )
             .ignoresSafeArea()
 
             VStack(spacing: 28) {
                 VStack(spacing: 8) {
-                    // If you have an asset named "app_logo", use Image("app_logo")
                     Image(systemName: "pills.fill")
                         .resizable()
                         .scaledToFit()
@@ -40,7 +34,6 @@ struct LoginPageView: View {
                 }
                 .padding(.bottom, 8)
 
-                // Input card
                 VStack(spacing: 16) {
                     InputRow(
                         systemImage: "envelope",
@@ -68,7 +61,7 @@ struct LoginPageView: View {
                     .foregroundStyle(.green)
                     .submitLabel(.go)
                     .onSubmit {
-                        if isValid { goNext = true }
+                        if isValid { completeAuth() }
                     }
                 }
                 .padding(18)
@@ -79,11 +72,9 @@ struct LoginPageView: View {
                 )
                 .padding(.horizontal)
 
-                // Login button -> OnboardingFlow
-                NavigationLink(destination: TodayView(), isActive: $goNext) { EmptyView() }.hidden()
-
                 Button {
-                    goNext = true
+                    // TODO: perform real login; on success:
+                    completeAuth()
                 } label: {
                     Text("Log In")
                         .font(.headline)
@@ -105,6 +96,7 @@ struct LoginPageView: View {
                 .opacity(isValid ? 1 : 0.6)
 
                 Button {
+                    // TODO: forgot password flow
                 } label: {
                     Text("Forgot password?")
                         .underline()
@@ -114,8 +106,13 @@ struct LoginPageView: View {
                 .buttonStyle(.plain)
             }
             .padding(.top)
-   
         }
+    }
+
+    private func completeAuth() {
+        // Flip global state so RootView swaps to the app (no back button)
+        settings.didChooseEntry = true
+        settings.onboardingCompleted = true   // set to false if you want to show onboarding first
     }
 }
 
@@ -151,8 +148,3 @@ private struct InputRow: View {
         )
     }
 }
-
-#Preview {
-    NavigationView { LoginPageView() }
-}
-

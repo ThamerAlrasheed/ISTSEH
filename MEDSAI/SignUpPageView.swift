@@ -1,12 +1,13 @@
 import SwiftUI
 
 struct SignUpPageView: View {
+    @EnvironmentObject var settings: AppSettings
+
     @State private var fullName: String = ""
     @State private var email: String = ""
     @State private var password: String = ""
     @State private var confirmPassword: String = ""
     @FocusState private var focusedField: Field?
-    @State private var goNext = false
 
     enum Field { case fullName, email, password, confirmPassword }
 
@@ -24,17 +25,13 @@ struct SignUpPageView: View {
     var body: some View {
         ZStack {
             LinearGradient(
-                gradient: Gradient(colors: [
-                    Color(.systemBackground),
-                    Color(.secondarySystemBackground)
-                ]),
+                gradient: Gradient(colors: [Color(.systemBackground), Color(.secondarySystemBackground)]),
                 startPoint: .top, endPoint: .bottom
             )
             .ignoresSafeArea()
 
             VStack(spacing: 28) {
                 VStack(spacing: 8) {
-                    // If you have an asset named "app_logo", use Image("app_logo")
                     Image(systemName: "pills.fill")
                         .resizable()
                         .scaledToFit()
@@ -45,7 +42,6 @@ struct SignUpPageView: View {
                 }
                 .padding(.bottom, 8)
 
-                // Input card
                 VStack(spacing: 16) {
                     InputRow(systemImage: "person", placeholder: "Full name", text: $fullName, isSecure: false, isFocused: focusedField == .fullName)
                         .focused($focusedField, equals: .fullName)
@@ -86,12 +82,9 @@ struct SignUpPageView: View {
                 )
                 .padding(.horizontal)
 
-                // Hidden link for programmatic navigation
-                NavigationLink(destination: TodayView(), isActive: $goNext) { EmptyView() }.hidden()
-
                 Button {
-                    // plug in your real sign-up logic here; on success:
-                    goNext = true
+                    // TODO: perform real sign-up; on success:
+                    completeAuth()
                 } label: {
                     Text("Sign Up")
                         .font(.headline)
@@ -124,9 +117,15 @@ struct SignUpPageView: View {
             .padding(.top)
         }
     }
+
+    private func completeAuth() {
+        // Flip global state so RootView swaps to the app (no back button)
+        settings.didChooseEntry = true
+        settings.onboardingCompleted = true   // set to false if you want to show onboarding first
+    }
 }
 
-// Reuse your existing InputRow from LoginPageView, or include this identical copy:
+// Reusable input row
 private struct InputRow: View {
     let systemImage: String
     let placeholder: String
@@ -158,6 +157,3 @@ private struct InputRow: View {
         )
     }
 }
-
-
-

@@ -1,12 +1,5 @@
 import SwiftUI
 import SwiftData
-
-import SwiftUI
-import SwiftData
-
-import SwiftUI
-import SwiftData
-
 import PhotosUI
 
 struct MedListView: View {

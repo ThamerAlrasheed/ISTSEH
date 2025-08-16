@@ -10,7 +10,6 @@ struct MediScheduleApp: App {
 
     init() {
         FirebaseApp.configure()
-        // ❌ Do NOT add the auth listener here (causes 'mutating self' error)
     }
 
     var body: some Scene {
@@ -19,13 +18,10 @@ struct MediScheduleApp: App {
                 .environmentObject(settings)
                 .modelContainer(for: Medication.self)
                 .tint(.green)
-                // ✅ Attach the auth listener from the view layer, once.
                 .onAppear {
                     guard !didAttachAuthListener else { return }
                     didAttachAuthListener = true
-
                     Auth.auth().addStateDidChangeListener { _, user in
-                        // Drive your app flow from Firebase auth state
                         if user != nil {
                             settings.didChooseEntry = true
                             settings.onboardingCompleted = true

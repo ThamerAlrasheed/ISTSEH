@@ -27,7 +27,7 @@ struct LoginPageView: View {
                     .scaledToFit()
                     .frame(width: 96, height: 96)
                     .foregroundStyle(.green)
-                Text("MedAi Log In")
+                Text("ISTSEH Login")
                     .font(.largeTitle).bold()
             }
             .padding(.top, 32)
@@ -156,3 +156,4 @@ struct LoginPageView: View {
         }
     }
 }
+

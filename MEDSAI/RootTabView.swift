@@ -1,54 +1,37 @@
 import SwiftUI
 
 struct RootTabView: View {
+    @State private var selection: Int = 1 // 0 Today, 1 Schedule, 2 Meds, 3 Settings
+
     var body: some View {
-        TabView {
-            // Today tab (rename TodayView() if your type is different)
+        TabView(selection: $selection) {
             TodayView()
                 .tabItem {
                     Image(systemName: "calendar.badge.clock")
                     Text("Today")
                 }
-            
-            ScheduleView()              // ← your weekly schedule screen
+                .tag(0)
+
+            ScheduleView()
                 .tabItem {
                     Image(systemName: "calendar")
                     Text("Schedule")
                 }
-            
-            // Meds tab
+                .tag(1)
+
             MedListView()
                 .tabItem {
                     Image(systemName: "pills.fill")
                     Text("Meds")
                 }
+                .tag(2)
 
-            // Settings tab (placeholder so it compiles)
-            AppSettingsView()
+            SettingsView() // <- UI view, NOT the AppSettings class
                 .tabItem {
                     Image(systemName: "gearshape")
                     Text("Settings")
                 }
-        }
-    }
-}
-
-// Simple placeholder so the project builds
-struct AppSettingsView: View {
-    @EnvironmentObject var settings: AppSettings
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("App") {
-                    Toggle("Onboarding completed", isOn: $settings.onboardingCompleted)
-                }
-                Section("Debug") {
-                    Button("Reset entry (show Landing again)") {
-                        settings.didChooseEntry = false
-                    }
-                }
-            }
-            .navigationTitle("Settings")
+                .tag(3)
         }
     }
 }

@@ -22,19 +22,25 @@ final class AppSettings: ObservableObject {
 
     private init() {
         // Profile defaults
-        firstName = ""
-        lastName  = ""
-        dateOfBirth = nil
+        self.firstName = ""
+        self.lastName  = ""
+        self.dateOfBirth = nil
 
         // Routine defaults
-        breakfast = DateComponents(hour: 8, minute: 0)
-        lunch     = DateComponents(hour: 13, minute: 0)
-        dinner    = DateComponents(hour: 19, minute: 0)
-        bedtime   = DateComponents(hour: 23, minute: 0)
-        wakeup    = DateComponents(hour: 7, minute: 0)
+        self.breakfast = DateComponents(hour: 8, minute: 0)
+        self.lunch     = DateComponents(hour: 13, minute: 0)
+        self.dinner    = DateComponents(hour: 19, minute: 0)
+        self.bedtime   = DateComponents(hour: 23, minute: 0)
+        self.wakeup    = DateComponents(hour: 7, minute: 0)
 
         // Flow defaults
-        onboardingCompleted = false
+        self.onboardingCompleted = false
+        self.didChooseEntry = false
+    }
+
+    // Convenience to bounce back to Landing
+    func resetAppFlow() {
         didChooseEntry = false
+        onboardingCompleted = false
     }
 }

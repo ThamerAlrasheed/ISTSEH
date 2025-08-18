@@ -8,8 +8,11 @@ struct MediScheduleApp: App {
     @StateObject private var settings = AppSettings.shared
     @State private var didAttachAuthListener = false
 
+    // Configure Firebase as early as possible
     init() {
-        FirebaseApp.configure()
+        if FirebaseApp.app() == nil {
+            FirebaseApp.configure()
+        }
     }
 
     var body: some Scene {
@@ -19,6 +22,7 @@ struct MediScheduleApp: App {
                 .modelContainer(for: Medication.self)
                 .tint(.green)
                 .onAppear {
+                    // Safe now because Firebase was configured in init()
                     guard !didAttachAuthListener else { return }
                     didAttachAuthListener = true
                     Auth.auth().addStateDidChangeListener { _, user in

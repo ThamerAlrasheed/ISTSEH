@@ -1,22 +1,23 @@
 import SwiftUI
+import FirebaseAuth
 
 struct RootView: View {
     @EnvironmentObject var settings: AppSettings
 
     var body: some View {
         Group {
-            if !settings.didChooseEntry {
-                // Landing shows Sign Up / Log In
-                LandingPageView()
-            } else if !settings.onboardingCompleted {
-                // If you still want an onboarding flow, show it here.
-                OnboardingFlow()
-            } else {
-                // ✅ Main app (tabs) — no back to auth possible
+            if shouldShowMainApp {
                 RootTabView()
+            } else {
+                LandingPageView() // your existing login/signup landing screen
             }
         }
-        // Important: keep RootView itself free of a NavigationStack
-        // so each tab can own its own NavigationStack.
+        .animation(.default, value: shouldShowMainApp)
+    }
+
+    private var shouldShowMainApp: Bool {
+        settings.onboardingCompleted &&
+        settings.didChooseEntry &&
+        Auth.auth().currentUser != nil
     }
 }

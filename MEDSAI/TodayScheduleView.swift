@@ -1,5 +1,7 @@
+// TodayScheduleView.swift
 import SwiftUI
 import SwiftData
+import FirebaseAuth   // (not strictly needed here, but ok to keep if you use later)
 
 struct TodayView: View {
     @Environment(\.modelContext) private var ctx
@@ -76,7 +78,6 @@ struct TodayView: View {
     }
 
     // MARK: - Actions
-
     private func toggle(_ dose: Dose) {
         dose.status = (dose.status == .taken ? .scheduled : .taken)
         try? ctx.save()
@@ -84,7 +85,6 @@ struct TodayView: View {
     }
 
     // MARK: - Build + upsert doses
-
     private func recompute() {
         let cal = Calendar.current
         let startOfToday = cal.startOfDay(for: Date())
@@ -94,7 +94,6 @@ struct TodayView: View {
         let schedule = Scheduler.buildAdherenceSchedule(meds: meds, settings: settings, date: Date())
 
         // 2) Upsert Dose objects for today
-        // Fetch today’s existing doses once
         var fd = FetchDescriptor<Dose>(
             predicate: #Predicate { $0.scheduledAt >= startOfToday && $0.scheduledAt < startOfTomorrow }
         )
@@ -127,17 +126,9 @@ struct TodayView: View {
     }
 }
 
+// MARK: - Schedule (Weekly/Monthly Calendar)
 
-// Weekly schedule placeholder (kept)
-struct ScheduleView: View {
-    var body: some View {
-        NavigationStack {
-            Text("Weekly schedule coming soon")
-                .foregroundStyle(.secondary)
-                .navigationTitle("Schedule")
-        }
-    }
-}
+// MARK: - Other screens kept
 
 struct ScanView: View {
     var body: some View {

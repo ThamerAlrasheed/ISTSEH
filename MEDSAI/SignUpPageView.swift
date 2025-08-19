@@ -1,13 +1,26 @@
 import SwiftUI
+import FirebaseCore
 import FirebaseAuth
 import FirebaseFirestore
 
-/// 2-step Sign Up:
-/// 1) Email + Password + Confirm Password
-/// 2) First/Last name, Date of Birth (labeled), optional meal/sleep routine.
-/// - Uses Firebase Auth to create the account
-/// - Stores profile in Firestore (/users/{uid})
-/// - On success, flips AppSettings so RootView shows the main app (no back navigation)
+// MARK: - Validators
+fileprivate func isValidEmail(_ email: String) -> Bool {
+    let e = email.trimmingCharacters(in: .whitespacesAndNewlines)
+    let pattern = #"^[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"#
+    return e.range(of: pattern, options: .regularExpression) != nil
+}
+
+/// >= 8 chars, at least one upper, one lower, one digit
+fileprivate func isStrongPassword(_ s: String) -> Bool {
+    guard s.count >= 8 else { return false }
+    let upper = s.range(of: #".*[A-Z].*"#, options: .regularExpression) != nil
+    let lower = s.range(of: #".*[a-z].*"#, options: .regularExpression) != nil
+    let digit = s.range(of: #".*\d.*"#, options: .regularExpression) != nil
+    return upper && lower && digit
+}
+
+/// 2-step sign up with validation.
+/// Step 1: email/password. Step 2: profile + optional routine → saved to Firestore.
 struct SignUpPageView: View {
     @EnvironmentObject var settings: AppSettings
 
@@ -34,7 +47,7 @@ struct SignUpPageView: View {
     @State private var bedtime   = DateComponents(hour: 23, minute: 0)
     @State private var wakeup    = DateComponents(hour: 7,  minute: 0)
 
-    // MARK: - UX State
+    // MARK: - UX
     @State private var isLoading = false
     @State private var alertTitle = ""
     @State private var alertMessage = ""
@@ -43,14 +56,10 @@ struct SignUpPageView: View {
     enum AuthField { case email, password, confirm }
     enum ProfileField { case first, last }
 
-    // MARK: - Validation
-    private var emailValid: Bool {
-        let e = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        return e.contains("@") && e.contains(".")
-    }
-    private var passwordStrongEnough: Bool { password.count >= 6 }
+    private var emailValid: Bool { isValidEmail(email) }
+    private var passwordStrongEnough: Bool { isStrongPassword(password) }
     private var passwordsMatch: Bool { confirmPassword.isEmpty || password == confirmPassword }
-    private var authValid: Bool { emailValid && passwordStrongEnough && (password == confirmPassword) }
+    private var authValid: Bool { emailValid && passwordStrongEnough && password == confirmPassword }
 
     private var profileValid: Bool {
         !firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
@@ -101,7 +110,7 @@ struct SignUpPageView: View {
             Text(alertMessage)
         }
         .onAppear {
-            // Seed routine from settings so the toggle shows user's defaults if opened
+            // Seed routine defaults from local settings
             breakfast = settings.breakfast
             lunch     = settings.lunch
             dinner    = settings.dinner
@@ -125,7 +134,7 @@ struct SignUpPageView: View {
 
     // MARK: - Step 1 UI
     private var authCard: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 10) {
             InputRow(
                 systemImage: "envelope",
                 placeholder: "Email",
@@ -138,7 +147,6 @@ struct SignUpPageView: View {
             .keyboardType(.emailAddress)
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
-            .foregroundStyle(.green)
 
             if !email.isEmpty && !emailValid {
                 InlineError("Please enter a valid email address.")
@@ -146,17 +154,16 @@ struct SignUpPageView: View {
 
             InputRow(
                 systemImage: "lock",
-                placeholder: "Password (min 6 chars)",
+                placeholder: "Password (≥8, upper, lower, number)",
                 text: $password,
                 isSecure: true,
                 isFocused: focusedAuth == .password
             )
             .focused($focusedAuth, equals: .password)
             .textContentType(.newPassword)
-            .foregroundStyle(.green)
 
             if !password.isEmpty && !passwordStrongEnough {
-                InlineError("Password must be at least 6 characters.")
+                InlineError("Password must be at least 8 characters and include upper, lower, and a number.")
             }
 
             InputRow(
@@ -168,10 +175,9 @@ struct SignUpPageView: View {
             )
             .focused($focusedAuth, equals: .confirm)
             .textContentType(.newPassword)
-            .foregroundStyle(.green)
 
-            if !passwordsMatch {
-                InlineError("Passwords don’t match.")
+            if !confirmPassword.isEmpty && !passwordsMatch {
+                InlineError("Passwords don't match.")
             }
         }
         .padding(18)
@@ -185,7 +191,7 @@ struct SignUpPageView: View {
 
     private var continueButton: some View {
         Button {
-            step = 2
+            withAnimation { step = 2 }
         } label: {
             Text("Continue")
                 .font(.headline)
@@ -222,7 +228,6 @@ struct SignUpPageView: View {
             )
             .focused($focusedProfile, equals: .first)
             .textContentType(.givenName)
-            .foregroundStyle(.green)
 
             InputRow(
                 systemImage: "person.fill",
@@ -233,7 +238,6 @@ struct SignUpPageView: View {
             )
             .focused($focusedProfile, equals: .last)
             .textContentType(.familyName)
-            .foregroundStyle(.green)
 
             // DOB with explicit label
             VStack(alignment: .leading, spacing: 6) {
@@ -298,18 +302,21 @@ struct SignUpPageView: View {
 
     private var createAccountButton: some View {
         Button(action: completeSignUp) {
-            Text("Create account")
-                .font(.headline)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 16)
-                .background(profileValid ? Color.green : Color.green.opacity(0.5))
-                .foregroundColor(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .shadow(radius: 8, y: 6)
+            HStack {
+                if isLoading { ProgressView().controlSize(.small) }
+                Text("Create account")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+            }
+            .padding(.vertical, 16)
+            .background(profileValid ? Color.green : Color.green.opacity(0.5))
+            .foregroundColor(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .shadow(radius: 8, y: 6)
         }
         .buttonStyle(.plain)
         .padding(.horizontal)
-        .disabled(!profileValid)
+        .disabled(!profileValid || isLoading)
     }
 
     private var backToStepOneButton: some View {
@@ -322,11 +329,16 @@ struct SignUpPageView: View {
         .padding(.top, 2)
     }
 
-    // MARK: - Actions (Firebase)
+    // MARK: - Actions
     private func completeSignUp() {
+        guard authValid, profileValid, !isLoading else { return }
+        isLoading = true
+
+        // Ensure Firebase configured (defensive)
+        if FirebaseApp.app() == nil { FirebaseApp.configure() }
+
         let emailTrimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        isLoading = true
         Auth.auth().createUser(withEmail: emailTrimmed, password: password) { result, error in
             if let error = error {
                 isLoading = false
@@ -339,7 +351,7 @@ struct SignUpPageView: View {
                 return
             }
 
-            let db = Firestore.firestore()
+            // Compose the profile document with embedded medications array
             let doc: [String: Any] = [
                 "firstName": firstName.trimmingCharacters(in: .whitespacesAndNewlines),
                 "lastName":  lastName.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -351,13 +363,16 @@ struct SignUpPageView: View {
                     "bedtime":   ["hour": bedtime.hour ?? 23,   "minute": bedtime.minute ?? 0],
                     "wakeup":    ["hour": wakeup.hour ?? 7,     "minute": wakeup.minute ?? 0],
                 ],
-                "createdAt": FieldValue.serverTimestamp()
+                "medications": [], // Initialize empty medications array
+                "createdAt": FieldValue.serverTimestamp(),
+                "updatedAt": FieldValue.serverTimestamp()
             ]
 
-            db.collection("users").document(uid).setData(doc) { err in
+            let db = Firestore.firestore()
+            db.collection("users").document(uid).setData(doc, merge: true) { err in
                 isLoading = false
                 if let err = err {
-                    presentError("Couldn’t save profile", err.localizedDescription)
+                    presentError("Couldn't save profile", err.localizedDescription)
                     return
                 }
 
@@ -373,7 +388,7 @@ struct SignUpPageView: View {
                     settings.wakeup    = wakeup
                 }
 
-                // Send user into the main app (RootView will also react to Auth state)
+                // Into the app
                 settings.didChooseEntry = true
                 settings.onboardingCompleted = true
             }
@@ -388,7 +403,6 @@ struct SignUpPageView: View {
 }
 
 // MARK: - Small reusable views
-
 private struct InputRow: View {
     let systemImage: String
     let placeholder: String
@@ -406,6 +420,8 @@ private struct InputRow: View {
                 SecureField(placeholder, text: $text)
             } else {
                 TextField(placeholder, text: $text)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
             }
         }
         .padding(.horizontal, 14)

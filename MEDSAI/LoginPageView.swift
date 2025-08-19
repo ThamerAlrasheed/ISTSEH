@@ -2,6 +2,25 @@ import SwiftUI
 import FirebaseAuth
 import FirebaseFirestore
 import Firebase
+import FirebaseCore
+
+// MARK: - Validators
+fileprivate func isValidEmail(_ email: String) -> Bool {
+    let e = email.trimmingCharacters(in: .whitespacesAndNewlines)
+    // Simple, robust email regex
+    let pattern =
+    #"^[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"#
+    return e.range(of: pattern, options: .regularExpression) != nil
+}
+
+/// >= 8 chars, at least one upper, one lower, one digit
+fileprivate func isStrongPassword(_ s: String) -> Bool {
+    guard s.count >= 8 else { return false }
+    let upper = s.range(of: #".*[A-Z].*"#, options: .regularExpression) != nil
+    let lower = s.range(of: #".*[a-z].*"#, options: .regularExpression) != nil
+    let digit = s.range(of: #".*\d.*"#, options: .regularExpression) != nil
+    return upper && lower && digit
+}
 
 struct LoginPageView: View {
     @EnvironmentObject var settings: AppSettings
@@ -9,17 +28,17 @@ struct LoginPageView: View {
     @State private var email: String = ""
     @State private var password: String = ""
     @FocusState private var focusedField: Field?
+    @State private var isLoading = false
+    @State private var showAlert = false
+    @State private var alertMessage = ""
     
     enum Field { case email, password }
     
-    var isValid: Bool {
-        !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !password.isEmpty
-    }
+    private var emailOK: Bool { isValidEmail(email) }
+    private var passwordOK: Bool { isStrongPassword(password) }
+    private var isValid: Bool { emailOK && passwordOK }
     
     var body: some View {
-        // ⚠️ This screen is *pushed* from Landing’s NavigationStack.
-        // We DO NOT push into the app from here. We flip flags and let RootView swap the root.
         VStack(spacing: 28) {
             VStack(spacing: 8) {
                 Image(systemName: "pills.fill")
@@ -33,7 +52,7 @@ struct LoginPageView: View {
             .padding(.top, 32)
             
             // Card
-            VStack(spacing: 16) {
+            VStack(spacing: 12) {
                 InputRow(systemImage: "envelope",
                          placeholder: "Email",
                          text: $email,
@@ -44,18 +63,24 @@ struct LoginPageView: View {
                 .keyboardType(.emailAddress)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-                .foregroundStyle(.green)
+                
+                if !email.isEmpty && !emailOK {
+                    InlineError("Please enter a valid email address.")
+                }
                 
                 InputRow(systemImage: "lock",
-                         placeholder: "Password",
+                         placeholder: "Password (≥8, upper, lower, number)",
                          text: $password,
                          isSecure: true,
                          isFocused: focusedField == .password)
                 .focused($focusedField, equals: .password)
                 .textContentType(.password)
-                .foregroundStyle(.green)
                 .submitLabel(.go)
                 .onSubmit { if isValid { completeAuth() } }
+                
+                if !password.isEmpty && !passwordOK {
+                    InlineError("Password must be at least 8 characters and include upper, lower, and a number.")
+                }
             }
             .padding(18)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -68,30 +93,34 @@ struct LoginPageView: View {
             Button {
                 completeAuth()
             } label: {
-                Text("Log In")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .background(isValid ? Color.accentColor : Color.accentColor.opacity(0.5))
-                    .foregroundColor(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .shadow(radius: 8, y: 6)
+                HStack {
+                    if isLoading { ProgressView().controlSize(.small) }
+                    Text("Log In")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                }
+                .padding(.vertical, 16)
+                .background(isValid ? Color.accentColor : Color.accentColor.opacity(0.5))
+                .foregroundColor(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .shadow(radius: 8, y: 6)
             }
             .buttonStyle(.plain)
             .padding(.horizontal)
-            .disabled(!isValid)
+            .disabled(!isValid || isLoading)
             
             // Forgot password
             Button {
-                // TODO: implement forgot password
+                Task { await sendReset() }
             } label: {
                 Text("Forgot password?")
                     .underline()
                     .foregroundStyle(.green)
             }
             .buttonStyle(.plain)
+            .disabled(!emailOK || isLoading)
             
-            // Don't have an account? Sign up
+            // Don’t have an account? Sign up
             NavigationLink(destination: SignUpPageView()) {
                 Text("Don’t have an account? Sign up")
                     .underline()
@@ -102,18 +131,24 @@ struct LoginPageView: View {
             Spacer()
         }
         .padding(.bottom, 24)
-        // ✅ Hide the back chevron on the Login screen itself
         .navigationBarBackButtonHidden(true)
+        .alert("Login", isPresented: $showAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(alertMessage)
+        }
     }
     
-    
     private func completeAuth() {
+        guard isValid, !isLoading else { return }
+        isLoading = true
         let emailTrimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
         
-        Auth.auth().signIn(withEmail: emailTrimmed, password: password) { result, error in
+        Auth.auth().signIn(withEmail: emailTrimmed, password: password) { _, error in
+            isLoading = false
             if let error = error {
-                // TODO: show error alert
-                print("Login error:", error)
+                alertMessage = error.localizedDescription
+                showAlert = true
                 return
             }
             // RootView will switch via auth listener; keep flags for instant UI
@@ -122,6 +157,17 @@ struct LoginPageView: View {
         }
     }
     
+    private func sendReset() async {
+        guard emailOK else { return }
+        let emailTrimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            try await Auth.auth().sendPasswordReset(withEmail: emailTrimmed)
+            alertMessage = "Password reset email sent."
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+        showAlert = true
+    }
     
     // Reusable input row
     private struct InputRow: View {
@@ -155,5 +201,20 @@ struct LoginPageView: View {
             )
         }
     }
+    
+    private struct InlineError: View {
+        let message: String
+        init(_ message: String) { self.message = message }
+        var body: some View {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .imageScale(.small)
+                Text(message)
+            }
+            .font(.footnote)
+            .foregroundStyle(.red)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 4)
+        }
+    }
 }
-

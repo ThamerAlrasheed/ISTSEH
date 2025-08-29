@@ -69,7 +69,7 @@ struct TodayView: View {
                                     .opacity(dose.status == .taken ? 0.6 : 1.0)
                                     .padding(.vertical, 4)
 
-                                    // ⛔️ Removed swipeActions (no more slide-to-delete)
+                                    // ⛔️ No swipe-to-delete here
                                 }
                             }
                         }
@@ -105,10 +105,10 @@ struct TodayView: View {
     private func toggle(_ dose: Dose) {
         dose.status = (dose.status == .taken ? .scheduled : .taken)
         try? ctx.save()
-        // no need to recompute; UI updates from the model change
+        // UI updates from model change
     }
 
-    // MARK: - Build + upsert doses from Firestore meds
+    // MARK: - Build + upsert doses from Firestore meds (ADVANCED SCHEDULER)
 
     private func recompute() {
         guard repo.isSignedIn else {
@@ -127,10 +127,10 @@ struct TodayView: View {
             return (med.startDate ... med.endDate).contains(today)
         }
 
-        // 2) Build (time, med) pairs for today
-        let schedule = buildAdherenceSchedule(meds: activeMeds, settings: settings, date: today)
+        // 2) Run the ADVANCED scheduler (Helpers.Scheduler) by adapting LocalMed -> Medication (keeping same IDs)
+        let schedulePairs = buildAdvancedScheduleForToday(from: activeMeds, date: today)
 
-        // 3) Upsert Dose objects for today
+        // 3) Upsert Dose objects for today (SwiftData)
         var fd = FetchDescriptor<Dose>(
             predicate: #Predicate { $0.scheduledAt >= startOfToday && $0.scheduledAt < startOfTomorrow }
         )
@@ -143,15 +143,19 @@ struct TodayView: View {
             index["\(d.medID)|\(d.scheduledAt.timeIntervalSince1970)"] = d
         }
 
+        // Map back Medication.id -> LocalMed
+        let byId: [String: LocalMed] = Dictionary(uniqueKeysWithValues: activeMeds.map { ($0.id, $0) })
+
         var result: [(Dose, LocalMed)] = []
-        for (time, med) in schedule {
-            let key = "\(med.id)|\(time.timeIntervalSince1970)"
+        for (time, medId) in schedulePairs {
+            guard let local = byId[medId] else { continue }
+            let key = "\(local.id)|\(time.timeIntervalSince1970)"
             if let d = index[key] {
-                result.append((d, med))
+                result.append((d, local))
             } else {
-                let d = Dose(medID: med.id, scheduledAt: time, status: .scheduled)
+                let d = Dose(medID: local.id, scheduledAt: time, status: .scheduled)
                 ctx.insert(d)
-                result.append((d, med))
+                result.append((d, local))
             }
         }
 
@@ -159,75 +163,32 @@ struct TodayView: View {
         todayDoses = result.sorted { $0.0.scheduledAt < $1.0.scheduledAt }
     }
 
-    // MARK: - Scheduling helpers (simple, meal-aware slots)
-
-    /// Build (time, med) for a single day using meal & sleep preferences.
-    private func buildAdherenceSchedule(meds: [LocalMed], settings: AppSettings, date: Date) -> [(Date, LocalMed)] {
-        var out: [(Date, LocalMed)] = []
-        for med in meds {
-            let times = timeSlots(for: med, settings: settings, on: date)
-            for t in times {
-                out.append((t, med))
-            }
-        }
-        return out.sorted { $0.0 < $1.0 }
-    }
-
-    private func timeSlots(for med: LocalMed, settings: AppSettings, on date: Date) -> [Date] {
-        let cal = Calendar.current
-        let wake   = timeOn(date, from: settings.wakeup,  defaultHour: 7)
-        let bed    = timeOn(date, from: settings.bedtime, defaultHour: 23)
-        let bkfst  = timeOn(date, from: settings.breakfast, defaultHour: 8)
-        let lunch  = timeOn(date, from: settings.lunch,     defaultHour: 13)
-        let dinner = timeOn(date, from: settings.dinner,    defaultHour: 19)
-
-        // If FDA text gave an interval (e.g. q12h), prefer that spacing within wake–bed window.
-        if let intervalH = med.minIntervalHours, intervalH > 0 {
-            var times: [Date] = []
-            var t = max(wake, bkfst) // start around wake/breakfast
-            while t <= bed && times.count < med.frequencyPerDay {
-                times.append(t)
-                if let next = cal.date(byAdding: .hour, value: intervalH, to: t) {
-                    t = next
-                } else {
-                    break
-                }
-            }
-            return times
+    /// Uses `Scheduler.buildAdherenceSchedule` (from Helpers.swift) by adapting LocalMed to Medication.
+    /// Returns pairs of (scheduled time, medication id) for today.
+    private func buildAdvancedScheduleForToday(from meds: [LocalMed], date: Date) -> [(Date, String)] {
+        // Adapt LocalMed -> Medication with SAME IDs for round-trip mapping
+        let adapted: [Medication] = meds.map { m in
+            Medication(
+                id: m.id,
+                name: m.name,
+                dosage: m.dosage,
+                frequencyPerDay: m.frequencyPerDay,
+                startDate: m.startDate,
+                endDate: m.endDate,
+                foodRule: m.foodRule,
+                notes: m.notes,
+                ingredients: m.ingredients,
+                minIntervalHours: m.minIntervalHours
+            )
         }
 
-        // Otherwise map frequency to typical meal anchors
-        switch med.frequencyPerDay {
-        case ..<1:
-            return []
-        case 1:
-            if med.foodRule == .afterFood { return [dinner] }
-            if med.foodRule == .beforeFood { return [bkfst] }
-            return [bkfst]
-        case 2:
-            return [bkfst, dinner]
-        case 3:
-            return [bkfst, lunch, dinner]
-        default:
-            let count = min(max(med.frequencyPerDay, 4), 6)
-            return evenlySpaced(from: wake, to: bed, count: count)
-        }
-    }
-
-    private func timeOn(_ day: Date, from comps: DateComponents, defaultHour: Int) -> Date {
-        let cal = Calendar.current
-        let h = comps.hour ?? defaultHour
-        let m = comps.minute ?? 0
-        var base = cal.date(bySettingHour: h, minute: m, second: 0, of: day) ?? day
-        let start = cal.startOfDay(for: day)
-        if base < start { base = start }
-        return base
-    }
-
-    private func evenlySpaced(from start: Date, to end: Date, count: Int) -> [Date] {
-        guard count > 1, end > start else { return [start] }
-        let interval = end.timeIntervalSince(start) / Double(count - 1)
-        return (0..<count).map { i in start.addingTimeInterval(Double(i) * interval) }
+        // Advanced scheduler returns (Date, Medication). We only need (Date, id).
+        let advanced = Scheduler.buildAdherenceSchedule(
+            meds: adapted,
+            settings: settings,
+            date: date
+        )
+        return advanced.map { ($0.0, $0.1.id) }
     }
 }
 

@@ -144,13 +144,23 @@ struct LoginPageView: View {
         isLoading = true
         let emailTrimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
         
-        Auth.auth().signIn(withEmail: emailTrimmed, password: password) { _, error in
+        Auth.auth().signIn(withEmail: emailTrimmed, password: password) { result, error in
             isLoading = false
             if let error = error {
                 alertMessage = error.localizedDescription
                 showAlert = true
                 return
             }
+
+            // Upsert email into Firestore user doc (helpful if older accounts missed it)
+            if let uid = result?.user.uid {
+                let db = Firestore.firestore()
+                db.collection("users").document(uid).setData(
+                    ["email": emailTrimmed, "updatedAt": FieldValue.serverTimestamp()],
+                    merge: true
+                )
+            }
+
             // RootView will switch via auth listener; keep flags for instant UI
             settings.didChooseEntry = true
             settings.onboardingCompleted = true

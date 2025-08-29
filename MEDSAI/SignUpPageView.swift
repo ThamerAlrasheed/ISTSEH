@@ -353,6 +353,7 @@ struct SignUpPageView: View {
 
             // Compose the profile document with embedded medications array
             let doc: [String: Any] = [
+                "email": emailTrimmed, // <-- add email to Firestore user doc
                 "firstName": firstName.trimmingCharacters(in: .whitespacesAndNewlines),
                 "lastName":  lastName.trimmingCharacters(in: .whitespacesAndNewlines),
                 "dateOfBirth": Timestamp(date: dob),

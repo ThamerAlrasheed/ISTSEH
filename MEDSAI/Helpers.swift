@@ -1,6 +1,8 @@
 import Foundation
 import UserNotifications
 
+// MARK: - Small utilities
+
 extension Date {
     var startOfDay: Date { Calendar.current.startOfDay(for: self) }
 }
@@ -36,16 +38,17 @@ func formatDosage(amount: Double, unit: DosageUnit) -> String {
     return "\(s) \(unit.rawValue)"
 }
 
+// MARK: - Scheduler v2 (awake-window aware + meal anchoring + FDA interval)
 
 enum Scheduler {
 
     // Tunables
-    private static let afterFoodMinutes  = 30
-    private static let beforeFoodMinutes = -45
-    private static let defaultMinGapSec: TimeInterval = 15 * 60   // 15 min
-    private static let mergeWindowSec: TimeInterval   = 10 * 60   // if a slot is within 10 min, try to merge
+    private static let afterFoodMinutes  = 30       // schedule ~30m after meals
+    private static let beforeFoodMinutes = -45      // schedule ~45m before meals
+    private static let defaultMinGapSec: TimeInterval = 15 * 60
+    private static let mergeWindowSec: TimeInterval   = 10 * 60
 
-    // MARK: Public entry
+    /// Public entry — returns the (time, med) pairs for the given day.
     static func buildAdherenceSchedule(
         meds: [Medication],
         settings: AppSettings,
@@ -56,62 +59,66 @@ enum Scheduler {
         let startOfDay = cal.startOfDay(for: date)
         let endOfDay   = cal.date(byAdding: .day, value: 1, to: startOfDay)!
 
-        // Consider only meds active today
+        // Only meds active today
         let active = meds.filter { $0.startDate <= endOfDay && $0.endDate >= startOfDay }
         if active.isEmpty { return [] }
 
-        // 1) Compute each med's *preferred* times for today
+        // 1) Build preferred anchors per med (already clamped to awake window)
         var pendingDoses: [(Date, Medication)] = []
         for m in active {
-            let anchors = preferredTimes(for: m, on: startOfDay, settings: settings)
-            for t in anchors {
-                // keep within today
+            for t in preferredTimes(for: m, on: startOfDay, settings: settings) {
                 if t >= startOfDay && t < endOfDay { pendingDoses.append((t, m)) }
             }
         }
 
-        // 2) Greedy clustering to MINIMIZE number of unique events:
-        //    - try to put doses into existing slots if they are near in time AND co-takable
-        //    - otherwise create a new slot for that dose
+        // 2) Greedy clustering to reduce unique events while respecting co‑scheduling rules
         var slots: [(time: Date, meds: [Medication])] = []
         for (t, m) in pendingDoses.sorted(by: { $0.0 < $1.0 }) {
             if let idx = bestSlotIndex(for: (t, m), in: slots) {
-                // safe to co-schedule in this slot → group it
                 slots[idx].meds.append(m)
-                // move slot time slightly toward this dose to keep slots compact (average)
-                let avg = averageTime(slots[idx].time, t)
-                slots[idx].time = avg
+                slots[idx].time = averageTime(slots[idx].time, t) // compact the slot a bit
             } else {
-                // create new slot
                 slots.append((t, [m]))
             }
         }
 
-        // 3) Enforce separation rules *between* slots when there are conflicts across groups
+        // 3) Enforce separation between slots if there are cross‑slot conflicts
         slots = enforceInterSlotSeparation(slots)
 
-        // 4) Expand slots into (Date, Medication) for UI
-        let result = slots
+        // 4) Expand
+        return slots
             .sorted { $0.time < $1.time }
             .flatMap { slot in slot.meds.map { (slot.time, $0) } }
-
-        return result
     }
 
-    // MARK: Preferred anchors for a single medication
+    // MARK: Preferred anchors (per med)
+
     private static func preferredTimes(for med: Medication, on startOfDay: Date, settings: AppSettings) -> [Date] {
         let cal = Calendar.current
+
         func time(_ comps: DateComponents) -> Date {
             cal.date(bySettingHour: comps.hour ?? 9, minute: comps.minute ?? 0, second: 0, of: startOfDay)!
         }
 
+        // Build key times for the selected date
         let breakfast = time(settings.breakfast)
         let lunch     = time(settings.lunch)
         let dinner    = time(settings.dinner)
         let wake      = time(settings.wakeup)
-        let bed       = time(settings.bedtime)
+        var bed       = time(settings.bedtime)
+
+        // If bedtime is earlier than wake (e.g., after midnight issues), push it to next day gracefully
+        if bed <= wake {
+            bed = cal.date(byAdding: .hour, value: 16, to: wake) ?? wake.addingTimeInterval(16 * 3600)
+        }
 
         func shift(_ base: Date, minutes: Int) -> Date { base.addingTimeInterval(TimeInterval(minutes * 60)) }
+
+        func clampInsideAwake(_ date: Date) -> Date {
+            if date < wake { return wake.addingTimeInterval(5 * 60) }
+            if date > bed  { return bed.addingTimeInterval(-5 * 60) }
+            return date
+        }
 
         switch med.foodRule {
         case .afterFood:
@@ -122,7 +129,9 @@ enum Scheduler {
             case 3:  anchors = [breakfast, lunch, dinner]
             default: anchors = [breakfast, lunch, dinner, bed]
             }
-            return Array(anchors.prefix(med.frequencyPerDay)).map { shift($0, minutes: afterFoodMinutes) }
+            return Array(anchors.prefix(med.frequencyPerDay))
+                .map { shift($0, minutes: afterFoodMinutes) }
+                .map(clampInsideAwake)
 
         case .beforeFood:
             var anchors: [Date]
@@ -132,13 +141,18 @@ enum Scheduler {
             case 3:  anchors = [breakfast, lunch, dinner]
             default: anchors = [breakfast, lunch, dinner, bed]
             }
-            return Array(anchors.prefix(med.frequencyPerDay)).map { shift($0, minutes: beforeFoodMinutes) }
+            return Array(anchors.prefix(med.frequencyPerDay))
+                .map { shift($0, minutes: beforeFoodMinutes) }
+                .map(clampInsideAwake)
 
         case .none:
-            // evenly across wake window; honor minIntervalHours if present
-            let start = wake
-            let end   = bed > start ? bed : cal.date(byAdding: .hour, value: 16, to: start)! // safe fallback
-            return evenlySpaced(count: med.frequencyPerDay, from: start, to: end, minSpacingHours: med.minIntervalHours)
+            // Evenly across the awake window; honor minIntervalHours if present
+            return evenlySpaced(
+                count: med.frequencyPerDay,
+                from: wake,
+                to: bed,
+                minSpacingHours: med.minIntervalHours
+            ).map(clampInsideAwake)
         }
     }
 
@@ -148,19 +162,31 @@ enum Scheduler {
         let total = end.timeIntervalSince(start)
         var step  = total / Double(count - 1)
         if let minH = minSpacingHours { step = max(step, Double(minH) * 3600) }
-        return (0..<count).map { start.addingTimeInterval(Double($0) * step) }
+
+        var out: [Date] = []
+        var cursor = start
+        out.append(cursor)
+        for _ in 1..<(count) {
+            cursor = cursor.addingTimeInterval(step)
+            if let last = out.last, let minH = minSpacingHours {
+                // Enforce minimum spacing
+                let needed = last.addingTimeInterval(Double(minH) * 3600)
+                if cursor < needed { cursor = needed }
+            }
+            // Cap at end
+            if cursor > end { cursor = end }
+            out.append(cursor)
+        }
+        return out
     }
 
     // MARK: Slotting / grouping
 
-    /// Find an existing slot we can merge into: close in time and co-takable with all meds already there.
     private static func bestSlotIndex(for dose: (Date, Medication),
                                       in slots: [(time: Date, meds: [Medication])]) -> Int? {
         for i in slots.indices {
             let slot = slots[i]
-            // near in time?
             if abs(slot.time.timeIntervalSince(dose.0)) <= mergeWindowSec {
-                // check coscheduling against everyone in the slot
                 if slot.meds.allSatisfy({ canCoSchedule($0, dose.1) }) {
                     return i
                 }
@@ -169,18 +195,16 @@ enum Scheduler {
         return nil
     }
 
-    /// Can A and B be taken together? (FDA rules via InteractionEngine)
+    /// Can A and B be taken together? (via InteractionEngine rules)
     private static func canCoSchedule(_ a: Medication, _ b: Medication) -> Bool {
         let conflicts = InteractionEngine.checkConflicts(
             meds: [(a.name, a.ingredients ?? []), (b.name, b.ingredients ?? [])]
         )
-        // If any "avoid" or "separate hours", we won't co-schedule
-        let hasAvoid = conflicts.contains { if case .avoid = $0.kind { return true } else { return false } }
+        let hasAvoid   = conflicts.contains { if case .avoid = $0.kind { return true } else { return false } }
         let needsHours = conflicts.contains { if case .separate = $0.kind { return true } else { return false } }
         return !(hasAvoid || needsHours)
     }
 
-    /// Ensure different slots obey separation requirements when their meds conflict.
     private static func enforceInterSlotSeparation(
         _ slots: [(time: Date, meds: [Medication])]
     ) -> [(time: Date, meds: [Medication])] {
@@ -192,7 +216,6 @@ enum Scheduler {
             for j in (i+1)..<out.count {
                 let a = out[i], b = out[j]
 
-                // derive the strongest rule between any pair across the two slots
                 var maxHours: Double = 0
                 var hasAvoid = false
                 for ma in a.meds {
@@ -234,13 +257,14 @@ enum Scheduler {
     }
 }
 
+// MARK: - Local notifications
 
 enum Notifier {
     static func requestAuth() async {
         _ = try? await UNUserNotificationCenter.current()
             .requestAuthorization(options: [.alert, .sound, .badge])
     }
-    
+
     static func schedule(local id: String, title: String, body: String, at date: Date) {
         let content = UNMutableNotificationContent()
         content.title = title
@@ -251,13 +275,13 @@ enum Notifier {
         let req = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
         UNUserNotificationCenter.current().add(req)
     }
-    
+
     static func cancel(ids: [String]) {
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ids)
     }
 }
 
-import Foundation
+// MARK: - Summarization & bullet extraction
 
 struct MedEssentials {
     let title: String
@@ -267,62 +291,82 @@ struct MedEssentials {
     let commonSideEffects: [String]     // “Common side effects”
     let importantWarnings: [String]     // “Warnings — get help if…”
     let interactionsToAvoid: [String]   // “Don’t mix with”
-    let ingredients: [String]
+    let ingredients: [String]                 
 }
 
 enum MedSummarizer {
-    // Turn dense label text into short bullets
-    static func bullets(from text: String, max: Int = 5) -> [String] {
-        // remove html tags + shrink whitespace
-        let cleaned = text
-            .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
-            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // split into sentences by ., ;, •, -  (very simple)
-        let parts = cleaned
-            .replacingOccurrences(of: "•", with: ".")
-            .split(whereSeparator: { ".;".contains($0) })
+    // Turn dense label text into short bullets
+    static func bullets(from raw: String, max: Int = 5) -> [String] {
+        // 0) Normalize whitespace & bullets
+        var text = raw
+            .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression) // strip HTML tags
+            .replacingOccurrences(of: "\r", with: "\n")
+            .replacingOccurrences(of: "•", with: "\n• ")          // keep bullets as their own lines
+            .replacingOccurrences(of: "·", with: "\n• ")
+            .replacingOccurrences(of: "‣", with: "\n• ")
+            .replacingOccurrences(of: "—", with: " – ")           // normalize long dash
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+
+        // 1) Remove big, shouty section headers like "1 INDICATIONS AND USAGE"
+        text = text.replacingOccurrences(
+            of: #"(^|\n)\s*\d+\s+[A-Z][A-Z\s/,-]{3,}(?=\n|$)"#,
+            with: "",
+            options: [.regularExpression]
+        )
+
+        // 2) Split into candidate lines (on bullets or sentence-ish boundaries)
+        let candidates: [String] = text
+            .replacingOccurrences(of: ".", with: ".\n")  // sentence newlines
+            .replacingOccurrences(of: ";", with: ";\n")
+            .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
 
-        // keep concise lines; de‑jargon a tiny bit
-        let simplified = parts
-            .map { s -> String in
-                var s = s
-                s = s.replacingOccurrences(of: "contraindicated", with: "do not use")
-                s = s.replacingOccurrences(of: "hypersensitivity", with: "allergic reaction")
-                s = s.replacingOccurrences(of: "administer", with: "take")
-                s = s.replacingOccurrences(of: "adverse reactions", with: "side effects")
-                s = s.replacingOccurrences(of: "dosage and administration", with: "how to take")
-                // shorten long lines
-                if s.count > 140 {
-                    let start = s.index(s.startIndex, offsetBy: min(120, s.count))
-                    if let space = s[start...].firstIndex(of: " ") {
-                        s = String(s.prefix(upTo: space))   // <-- key change
-                    } else {
-                        s = String(s.prefix(140))
-                    }
-                }
-                return s
-            }
+        // 3) Clean each line & keep only meaningful content
+        var lines: [String] = []
+        for var s in candidates {
+            // drop leading bullet markers
+            if s.hasPrefix("•") { s = s.dropFirst().trimmingCharacters(in: .whitespaces) }
 
-        // remove near‑duplicates
+            // remove orphan number lists like "(1)", "(1,2)", "2", "1 – 1"
+            if s.range(of: #"^\(?\d+(?:\s*,\s*\d+)*\)?$"#, options: .regularExpression) != nil { continue }
+            if s.range(of: #"^\d+\s*[–-]\s*\d+$"#, options: .regularExpression) != nil { continue }
+
+            // remove bracketed numeric references occurring alone or at the start
+            s = s.replacingOccurrences(of: #"^\(?\d+(?:,\s*\d+)*\)?\s*"#,
+                                       with: "",
+                                       options: .regularExpression)
+
+            // prune very short / low-information lines
+            if s.count < 8 { continue }
+
+            // trim to ~140 chars at a natural boundary
+            if s.count > 160 {
+                let cut = s.index(s.startIndex, offsetBy: 140)
+                if let space = s[cut...].firstIndex(of: " ") {
+                    s = String(s[..<space])
+                } else {
+                    s = String(s.prefix(150))
+                }
+            }
+            lines.append(s)
+        }
+
+        // 4) De-duplicate near-duplicates
         var out: [String] = []
-        for line in simplified {
-            if out.contains(where: { similar($0, line) }) { continue }
-            out.append(line)
+        func similar(_ a: String, _ b: String) -> Bool {
+            let ax = a.lowercased(), bx = b.lowercased()
+            if ax == bx { return true }
+            if ax.contains(bx) || bx.contains(ax) { return true }
+            return false
+        }
+        for s in lines {
+            if out.contains(where: { similar($0, s) }) { continue }
+            out.append(s)
             if out.count >= max { break }
         }
         return out
-    }
-
-    // very lightweight duplicate check
-    private static func similar(_ a: String, _ b: String) -> Bool {
-        let la = a.lowercased(), lb = b.lowercased()
-        if la == lb { return true }
-        if la.contains(lb) || lb.contains(la) { return true }
-        return false
     }
 
     static func essentials(from details: MedDetails) -> MedEssentials {
@@ -330,26 +374,22 @@ enum MedSummarizer {
         let parsed = DrugTextParser.parse(details.combinedText)
 
         var tips: [String] = []
-        if let fr = parsed.foodRule { tips.append(fr == .afterFood ? "Take after food" : "Take before food") }
+        if let fr = parsed.foodRule {
+            tips.append(fr == .afterFood ? "Take after food" : "Take before food")
+        }
         if let ih = parsed.minIntervalHours { tips.append("About every \(ih)h") }
         if !parsed.mustAvoid.isEmpty { tips.append("Avoid: " + parsed.mustAvoid.joined(separator: ", ")) }
-
-        // Build sections as short bullets
-        let whatFor      = bullets(from: details.uses, max: 4)
-        let howToTake    = bullets(from: details.dosage, max: 5)
-        let interactions = bullets(from: details.interactions, max: 4)
-        let warnings     = bullets(from: details.warnings, max: 5)
-        let sidefx       = bullets(from: details.sideEffects, max: 5)
 
         return MedEssentials(
             title: details.title,
             quickTips: tips,
-            whatFor: whatFor,
-            howToTake: howToTake,
-            commonSideEffects: sidefx,
-            importantWarnings: warnings,
-            interactionsToAvoid: interactions,
+            whatFor: bullets(from: details.uses, max: 4),
+            howToTake: bullets(from: details.dosage, max: 5),
+            commonSideEffects: bullets(from: details.sideEffects, max: 5),
+            importantWarnings: bullets(from: details.warnings, max: 5),
+            interactionsToAvoid: bullets(from: details.interactions, max: 4),
             ingredients: details.ingredients
         )
     }
 }
+

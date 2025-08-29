@@ -17,6 +17,13 @@ struct SettingsView: View {
                     }
                 }
 
+                // User
+                Section("User") {
+                    NavigationLink(destination: UserDetailsView()) {
+                        Label("User Details", systemImage: "person.crop.circle")
+                    }
+                }
+
                 // Account
                 Section("Account") {
                     if let user = Auth.auth().currentUser {

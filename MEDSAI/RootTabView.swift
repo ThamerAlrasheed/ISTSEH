@@ -12,7 +12,7 @@ struct RootTabView: View {
                 }
                 .tag(0)
 
-            ScheduleView()
+            SchedulePageView()
                 .tabItem {
                     Image(systemName: "calendar")
                     Text("Schedule")

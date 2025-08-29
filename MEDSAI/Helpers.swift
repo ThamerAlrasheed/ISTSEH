@@ -48,6 +48,11 @@ enum Scheduler {
     private static let defaultMinGapSec: TimeInterval = 15 * 60
     private static let mergeWindowSec: TimeInterval   = 10 * 60
 
+    // Gentle edge padding for normal (no-food-rule) meds
+    private static let normalAfterWakePadMin: Int = 15
+    private static let normalBeforeBedPadMin: Int = 15
+    private static let edgeEqualityLeewaySec: TimeInterval = 120
+
     /// Public entry — returns the (time, med) pairs for the given day.
     static func buildAdherenceSchedule(
         meds: [Medication],
@@ -71,7 +76,7 @@ enum Scheduler {
             }
         }
 
-        // 2) Greedy clustering to reduce unique events while respecting co‑scheduling rules
+        // 2) Greedy clustering to reduce unique events while respecting co-scheduling rules
         var slots: [(time: Date, meds: [Medication])] = []
         for (t, m) in pendingDoses.sorted(by: { $0.0 < $1.0 }) {
             if let idx = bestSlotIndex(for: (t, m), in: slots) {
@@ -82,7 +87,7 @@ enum Scheduler {
             }
         }
 
-        // 3) Enforce separation between slots if there are cross‑slot conflicts
+        // 3) Enforce separation between slots if there are cross-slot conflicts
         slots = enforceInterSlotSeparation(slots)
 
         // 4) Expand
@@ -107,7 +112,7 @@ enum Scheduler {
         let wake      = time(settings.wakeup)
         var bed       = time(settings.bedtime)
 
-        // If bedtime is earlier than wake (e.g., after midnight issues), push it to next day gracefully
+        // If bedtime is earlier than wake (after-midnight), push to next day gracefully
         if bed <= wake {
             bed = cal.date(byAdding: .hour, value: 16, to: wake) ?? wake.addingTimeInterval(16 * 3600)
         }
@@ -146,13 +151,25 @@ enum Scheduler {
                 .map(clampInsideAwake)
 
         case .none:
-            // Evenly across the awake window; honor minIntervalHours if present
-            return evenlySpaced(
+            // Evenly across the awake window; honor minIntervalHours if present.
+            // If a time lands exactly on wake/bed, nudge: +15m after wake, −15m before bed.
+            let raw = evenlySpaced(
                 count: med.frequencyPerDay,
                 from: wake,
                 to: bed,
                 minSpacingHours: med.minIntervalHours
-            ).map(clampInsideAwake)
+            )
+
+            let nudged = raw.map { t -> Date in
+                var out = t
+                if abs(t.timeIntervalSince(wake)) <= edgeEqualityLeewaySec {
+                    out = wake.addingTimeInterval(TimeInterval(normalAfterWakePadMin * 60))
+                } else if abs(t.timeIntervalSince(bed)) <= edgeEqualityLeewaySec {
+                    out = bed.addingTimeInterval(TimeInterval(-normalBeforeBedPadMin * 60))
+                }
+                return clampInsideAwake(out)
+            }
+            return nudged
         }
     }
 
@@ -291,7 +308,7 @@ struct MedEssentials {
     let commonSideEffects: [String]     // “Common side effects”
     let importantWarnings: [String]     // “Warnings — get help if…”
     let interactionsToAvoid: [String]   // “Don’t mix with”
-    let ingredients: [String]                 
+    let ingredients: [String]
 }
 
 enum MedSummarizer {
@@ -319,8 +336,8 @@ enum MedSummarizer {
         let candidates: [String] = text
             .replacingOccurrences(of: ".", with: ".\n")  // sentence newlines
             .replacingOccurrences(of: ";", with: ";\n")
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .components(separatedBy: CharacterSet.newlines)
+            .map { $0.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
 
         // 3) Clean each line & keep only meaningful content
@@ -370,7 +387,6 @@ enum MedSummarizer {
     }
 
     static func essentials(from details: MedDetails) -> MedEssentials {
-        // Parse quick rules from combined text
         let parsed = DrugTextParser.parse(details.combinedText)
 
         var tips: [String] = []
@@ -392,4 +408,3 @@ enum MedSummarizer {
         )
     }
 }
-

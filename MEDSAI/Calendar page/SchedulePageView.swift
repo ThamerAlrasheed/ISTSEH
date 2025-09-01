@@ -55,32 +55,18 @@ struct SchedulePageView: View {
                         // ----- PAGE CONTENT -----
                         VStack(spacing: 24) {
 
-                            if dayDoses.isEmpty {
-                                // Doses only (no appointments shown)
-                                SectionCard {
-                                    SectionHeader(title: sectionTitle("Doses"))
-                                    VStack(spacing: 12) {
-                                        ContentUnavailableView("No doses on this day",
-                                                               systemImage: "calendar.badge.exclamationmark")
-                                            .frame(maxWidth: .infinity, alignment: .center)
+                            // Appointments block (always shown)
+                            appointmentsBlock
+                                .background(
+                                    GeometryReader { proxy in
+                                        Color.clear
+                                            .preference(key: AppointmentsHeightKey.self,
+                                                        value: proxy.size.height)
                                     }
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 12)
-                                }
-                            } else {
-                                // Appointments block (measured for fade trigger)
-                                appointmentsBlock
-                                    .background(
-                                        GeometryReader { proxy in
-                                            Color.clear
-                                                .preference(key: AppointmentsHeightKey.self,
-                                                            value: proxy.size.height)
-                                        }
-                                    )
+                                )
 
-                                // Doses block
-                                dosesBlock
-                            }
+                            // Doses block (always shown; handles empty state internally)
+                            dosesBlock
                         }
                         .padding(.bottom, 24)
                         // Reserve space at the top for the overlay header so content starts below it
@@ -145,7 +131,7 @@ struct SchedulePageView: View {
         withAnimation(fadeAnimation) { fadeProgress = p }
     }
 
-    // MARK: - Appointments block (above doses when doses exist)
+    // MARK: - Appointments block (above doses)
     private var appointmentsBlock: some View {
         SectionCard {
             SectionHeader(title: sectionTitle("Appointments"))
@@ -244,7 +230,7 @@ struct SchedulePageView: View {
         }
     }
 
-    // MARK: - Doses block (read-only)
+    // MARK: - Doses block (read-only, with empty state)
     private var dosesBlock: some View {
         SectionCard {
             SectionHeader(title: sectionTitle("Doses"))
@@ -258,6 +244,11 @@ struct SchedulePageView: View {
                     ContentUnavailableView("Couldn't load medications",
                                            systemImage: "exclamationmark.triangle",
                                            description: Text(err))
+                )
+            } else if dayDoses.isEmpty {
+                rowPadding(
+                    ContentUnavailableView("No doses on this day",
+                                           systemImage: "calendar.badge.exclamationmark")
                 )
             } else {
                 VStack(spacing: 0) {

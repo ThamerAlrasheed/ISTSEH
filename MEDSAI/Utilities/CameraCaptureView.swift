@@ -62,17 +62,13 @@ struct CameraCaptureView: View {
     }
 }
 
-// MARK: - ViewModel
-
 final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate {
-    // Public state
     @Published var capturedImage: UIImage? = nil
     @Published var isReady = false
     @Published var isCapturing = false
     @Published var showError = false
     @Published var errorMessage: String? = nil
 
-    // Session
     let session = AVCaptureSession()
     private let sessionQueue = DispatchQueue(label: "CameraSessionQueue", qos: .userInitiated)
     private let photoOutput = AVCapturePhotoOutput()
@@ -80,6 +76,13 @@ final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     // MARK: Start / Stop
 
     func start() async throws {
+        // 0) Safety: make sure Info.plist has the key, otherwise iOS will abort.
+        if Bundle.main.object(forInfoDictionaryKey: "NSCameraUsageDescription") == nil {
+            throw NSError(domain: "Camera", code: -10,
+                          userInfo: [NSLocalizedDescriptionKey:
+                                     "Missing NSCameraUsageDescription in Info.plist. Add it to avoid crashes."])
+        }
+
         // 1) Permissions
         let status = AVCaptureDevice.authorizationStatus(for: .video)
         if status == .notDetermined {
@@ -95,7 +98,7 @@ final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
                           userInfo: [NSLocalizedDescriptionKey: "Camera permission denied."])
         }
 
-        // 2) Configure + start (asynchronously on sessionQueue)
+        // 2) Configure + start on the background session queue (fully async, no sync calls)
         try await configureSessionIfNeeded()
         try await startRunning()
         await MainActor.run { self.isReady = true }
@@ -124,18 +127,14 @@ final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
                      didFinishProcessingPhoto photo: AVCapturePhoto,
                      error: Error?) {
         defer { isCapturing = false }
-        if let error = error {
-            present(error.localizedDescription); return
-        }
+        if let error = error { present(error.localizedDescription); return }
         guard let data = photo.fileDataRepresentation(),
-              let img = UIImage(data: data) else {
-            present("Could not read image data."); return
-        }
+              let img = UIImage(data: data) else { present("Could not read image data."); return }
         let normalized = img.fixedOrientation()
         DispatchQueue.main.async { self.capturedImage = normalized }
     }
 
-    // MARK: Private – async session helpers (no sync)
+    // MARK: Private async helpers
 
     private func configureSessionIfNeeded() async throws {
         try await withCheckedThrowingContinuation { cont in
@@ -199,7 +198,7 @@ final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
         }
     }
 
-    // MARK: Error surfacing
+    // MARK: Error UI
 
     private func present(_ message: String) {
         DispatchQueue.main.async {

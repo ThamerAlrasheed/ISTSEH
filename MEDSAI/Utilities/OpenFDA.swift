@@ -1,28 +1,6 @@
 import Foundation
 
-// MARK: - LABEL (existing)
-
-struct LabelResponse: Decodable { let results: [LabelDoc]? }
-
-struct LabelDoc: Decodable {
-    let indications_and_usage: [String]?
-    let dosage_and_administration: [String]?
-    let contraindications: [String]?
-    let warnings: [String]?
-    let warnings_and_cautions: [String]?
-    let adverse_reactions: [String]?
-    let drug_interactions: [String]?
-    let patient_information: [String]?
-    let information_for_patients: [String]?
-    let openfda: OpenFDAFields?
-    var ingredients: [String] { openfda?.substance_name ?? [] }
-}
-
-struct OpenFDAFields: Decodable {
-    let brand_name: [String]?
-    let generic_name: [String]?
-    let substance_name: [String]?
-}
+// MARK: - Public model (UNCHANGED)
 
 struct MedDetails {
     let title: String
@@ -42,8 +20,284 @@ extension MedDetails {
     }
 }
 
-// MARK: - NDC (NEW for strengths)
+// MARK: - Service (same name / same public methods)
 
+enum OpenFDAService {
+    // openFDA (content)
+    private static let labelBase = "https://api.fda.gov/drug/label.json"
+    private static let ndcBase   = "https://api.fda.gov/drug/ndc.json"
+
+    // DailyMed (setid lookup only; SPL is XML)
+    private static let dailymedBase = "https://dailymed.nlm.nih.gov/dailymed/services/v2"
+
+    // RxNorm (name normalization)
+    private static let rxnormBase = "https://rxnav.nlm.nih.gov/REST"
+
+    // Tiny in-memory caches to keep things snappy
+    private static var rxcuiCache: [String:String] = [:]      // query.lowercased() -> rxcui
+    private static var setIdCache: [String:String] = [:]      // rxcui -> setid
+    private static var detailsCache: [String:MedDetails] = [:]// name.lowercased() -> details
+
+    // MARK: Public: details (call sites UNCHANGED)
+    static func fetchDetails(forName name: String) async throws -> MedDetails? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let key = trimmed.lowercased()
+        if let cached = detailsCache[key] { return cached }
+
+        // Best-effort RxNorm→DailyMed prefetch in the background (do NOT block UI)
+        Task.detached { await prefetchDailyMedKeying(by: trimmed) }
+
+        // Content FIRST: openFDA brand → generic → loose text, with short timeouts
+        if let doc = try await queryLabel(field: "openfda.brand_name", value: trimmed, timeout: 4) {
+            let md = mapOpenFDA(doc, displayName: trimmed); detailsCache[key] = md; return md
+        }
+        if let doc = try await queryLabel(field: "openfda.generic_name", value: trimmed, timeout: 4) {
+            let md = mapOpenFDA(doc, displayName: trimmed); detailsCache[key] = md; return md
+        }
+        if let doc = try await queryLabelContains(value: trimmed, timeout: 4) {
+            let md = mapOpenFDA(doc, displayName: trimmed); detailsCache[key] = md; return md
+        }
+
+        // Last resort — return a shell so the UI never hangs
+        let md = MedDetails(
+            title: normalizedDisplayName(from: trimmed),
+            uses: "", dosage: "", interactions: "", warnings: "", sideEffects: "", ingredients: []
+        )
+        detailsCache[key] = md
+        return md
+    }
+
+    // MARK: Public: strengths (signature UNCHANGED)
+    static func fetchDosageOptions(forName name: String) async throws -> [String] {
+        if let strengths = try await queryNDC(field: "brand_name", value: name), !strengths.isEmpty {
+            return strengths.sorted(by: strengthSort)
+        }
+        if let strengths = try await queryNDC(field: "generic_name", value: name), !strengths.isEmpty {
+            return strengths.sorted(by: strengthSort)
+        }
+        return []
+    }
+}
+
+// MARK: - Background prefetch (non-blocking)
+
+private extension OpenFDAService {
+    static func prefetchDailyMedKeying(by name: String) async {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        do {
+            if let rxcui = try await rxnormApproximateCUI(for: trimmed, timeout: 3) {
+                if setIdCache[rxcui] == nil,
+                   let setid = try await dailymedPrimarySetID(for: rxcui, timeout: 3) {
+                    setIdCache[rxcui] = setid
+                    debugLog("DailyMed setid for \(trimmed): \(setid)")
+                }
+            }
+        } catch {
+            debugLog("Prefetch skipped for \(trimmed): \(error.localizedDescription)")
+        }
+    }
+}
+
+// MARK: - DailyMed (correct endpoint for setid)
+
+private extension OpenFDAService {
+    /// Correct: /spls.json?rxcui=... (NOT a path segment)
+    static func dailymedPrimarySetID(for rxcui: String, timeout: TimeInterval) async throws -> String? {
+        let url = URL(string: "\(dailymedBase)/spls.json?rxcui=\(rxcui)&pagesize=1")!
+        let data = try await fetchData(url: url, timeout: timeout)
+        let decoded: DMSetList = try JSONDecoder().decode(DMSetList.self, from: data)
+        return decoded.data.first?.setid
+    }
+}
+
+// MARK: - RxNorm
+
+private extension OpenFDAService {
+    static func rxnormApproximateCUI(for query: String, timeout: TimeInterval) async throws -> String? {
+        let key = query.lowercased()
+        if let cached = rxcuiCache[key] { return cached }
+
+        let term = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+        let url = URL(string: "\(rxnormBase)/approximateTerm.json?term=\(term)&maxEntries=1&option=1")!
+        let data = try await fetchData(url: url, timeout: timeout)
+        let decoded: RxApprox = try JSONDecoder().decode(RxApprox.self, from: data)
+        let rxcui = decoded.approximateGroup?.candidate?.first?.rxcui
+        if let r = rxcui { rxcuiCache[key] = r }
+        return rxcui
+    }
+
+    static func normalizedDisplayName(from name: String) -> String {
+        let t = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return name }
+        // Soft title-casing for SHOUTY CAPS
+        let tokens = t.split(separator: " ")
+        return tokens.map { w in
+            let s = String(w)
+            if s == s.uppercased(), s.count > 2 { return s.prefix(1) + s.dropFirst().lowercased() }
+            return s
+        }.joined(separator: " ")
+    }
+}
+
+// MARK: - openFDA label (content)
+
+private extension OpenFDAService {
+    static func queryLabel(field: String, value: String, timeout: TimeInterval) async throws -> LabelDoc? {
+        let encoded = value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? value
+
+        // Try exact match first
+        let exact = URL(string: "\(labelBase)?search=\(field):\"\(encoded)\"&limit=1")!
+        if let doc = try? await fetchLabelDoc(url: exact, timeout: timeout) { return doc }
+
+        // Fallback: contains
+        let like = URL(string: "\(labelBase)?search=\(field):\(encoded)&limit=1")!
+        return try await fetchLabelDoc(url: like, timeout: timeout)
+    }
+
+    static func queryLabelContains(value: String, timeout: TimeInterval) async throws -> LabelDoc? {
+        let encoded = value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? value
+        let url = URL(string: "\(labelBase)?search=description:\(encoded)&limit=1")!
+        return try await fetchLabelDoc(url: url, timeout: timeout)
+    }
+
+    static func fetchLabelDoc(url: URL, timeout: TimeInterval) async throws -> LabelDoc? {
+        let data = try await fetchData(url: url, timeout: timeout)
+        let decoded: LabelResponse = try JSONDecoder().decode(LabelResponse.self, from: data)
+        return decoded.results?.first
+    }
+
+    static func mapOpenFDA(_ doc: LabelDoc, displayName: String) -> MedDetails {
+        let uses   = cleanLabelText(join(doc.indications_and_usage))
+        let dose   = cleanLabelText(join(doc.dosage_and_administration))
+        let interact = cleanLabelText([join(doc.drug_interactions), join(doc.patient_information), join(doc.information_for_patients)]
+            .filter { !$0.isEmpty }.joined(separator: "\n\n"))
+        let warn   = cleanLabelText([join(doc.warnings), join(doc.warnings_and_cautions), join(doc.contraindications)]
+            .filter { !$0.isEmpty }.joined(separator: "\n\n"))
+        let se     = cleanLabelText(join(doc.adverse_reactions))
+        let ingr   = (doc.openfda?.substance_name ?? []) + (doc.openfda?.pharm_class_pe ?? []) + (doc.openfda?.pharm_class_epc ?? [])
+
+        // Prefer a title that matches what the user typed
+        let fallback = normalizedDisplayName(from: displayName)
+        let brand = doc.openfda?.brand_name?.first
+        let generic = doc.openfda?.generic_name?.first
+        let chosen: String
+        if let b = brand, b.range(of: displayName, options: .caseInsensitive) != nil {
+            chosen = b
+        } else if let g = generic, g.range(of: displayName, options: .caseInsensitive) != nil {
+            chosen = g
+        } else {
+            chosen = brand ?? generic ?? fallback
+        }
+
+        return MedDetails(
+            title: normalizedDisplayName(from: chosen),
+            uses: uses, dosage: dose, interactions: interact, warnings: warn, sideEffects: se,
+            ingredients: uniq(ingr.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+        )
+    }
+
+    static func join(_ arr: [String]?) -> String {
+        (arr ?? [])
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+    }
+}
+
+// MARK: - NDC strengths (UNCHANGED signature)
+
+private extension OpenFDAService {
+    static func queryNDC(field: String, value: String) async throws -> [String]? {
+        let encoded = value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? value
+        let url = URL(string: "\(ndcBase)?search=\(field):\"\(encoded)\"&limit=25")!
+        let data = try await fetchData(url: url, timeout: 6)
+        let decoded: NDCResponse = try JSONDecoder().decode(NDCResponse.self, from: data)
+
+        var strengths: [String] = []
+        for p in decoded.results ?? [] {
+            for a in p.active_ingredients ?? [] {
+                if let s = a.strength { strengths.append(cleanStrength(s)) }
+            }
+        }
+        return Array(uniq(strengths)).sorted(by: strengthSort)
+    }
+
+    static func cleanStrength(_ s: String) -> String {
+        let parts = s.split(separator: " ")
+        if parts.count >= 2 { return "\(parts[0]) \(parts[1])" }
+        return s
+    }
+
+    static func strengthSort(_ a: String, _ b: String) -> Bool {
+        func parse(_ s: String) -> (Double, String)? {
+            let parts = s.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+            guard parts.count == 2, let v = Double(parts[0]) else { return nil }
+            return (v, parts[1].lowercased())
+        }
+        if let pa = parse(a), let pb = parse(b), pa.1 == pb.1 { return pa.0 < pb.0 }
+        return a.localizedStandardCompare(b) == .orderedAscending
+    }
+}
+
+// MARK: - Networking helper (short timeouts)
+
+private extension OpenFDAService {
+    static func fetchData(url: URL, timeout: TimeInterval) async throws -> Data {
+        var req = URLRequest(url: url)
+        req.timeoutInterval = timeout
+        let (data, _) = try await URLSession.shared.data(for: req)
+        return data
+    }
+}
+
+// MARK: - Decoding structs
+
+// DailyMed list (for setid lookup)
+private struct DMSetList: Decodable {
+    struct Item: Decodable {
+        let setid: String?
+        let spl_version: String?
+        let title: String?
+        let published_date: String?
+    }
+    let metadata: DMMetadata?
+    let data: [Item]
+}
+private struct DMMetadata: Decodable {
+    let total_elements: String?
+    let elements_per_page: String?
+    let total_pages: String?
+    let current_page: String?
+}
+
+// openFDA label (subset)
+private struct LabelResponse: Decodable { let results: [LabelDoc]? }
+
+private struct LabelDoc: Decodable {
+    let indications_and_usage: [String]?
+    let dosage_and_administration: [String]?
+    let contraindications: [String]?
+    let warnings: [String]?
+    let warnings_and_cautions: [String]?
+    let adverse_reactions: [String]?
+    let drug_interactions: [String]?
+    let patient_information: [String]?
+    let information_for_patients: [String]?
+    let openfda: OpenFDAFields?
+}
+
+private struct OpenFDAFields: Decodable {
+    let brand_name: [String]?
+    let generic_name: [String]?
+    let substance_name: [String]?
+    let pharm_class_epc: [String]?
+    let pharm_class_pe: [String]?
+}
+
+// NDC products (subset)
 private struct NDCResponse: Decodable { let results: [NDCProduct]? }
 
 private struct NDCProduct: Decodable {
@@ -58,180 +312,37 @@ private struct NDCProduct: Decodable {
     let active_ingredients: [ActiveIngredient]?
 }
 
-// MARK: - Service
-
-enum OpenFDAService {
-    private static let labelBase = "https://api.fda.gov/drug/label.json"
-    private static let ndcBase   = "https://api.fda.gov/drug/ndc.json"
-
-    // Fetch label-derived details (existing)
-    static func fetchDetails(forName name: String) async throws -> MedDetails? {
-        if let doc = try await queryLabel(field: "openfda.brand_name", value: name) {
-            return mapLabel(doc)
-        }
-        if let doc = try await queryLabel(field: "openfda.generic_name", value: name) {
-            return mapLabel(doc)
-        }
-        return nil
+// RxNorm approximateTerm response
+private struct RxApprox: Decodable {
+    struct ApproxGroup: Decodable {
+        struct Candidate: Decodable { let rxcui: String? }
+        let candidate: [Candidate]?
     }
+    let approximateGroup: ApproxGroup?
+}
 
-    // NEW: Fetch a curated list of marketed strengths (e.g., ["5 mg","10 mg"])
-    static func fetchDosageOptions(forName name: String) async throws -> [String] {
-        // Try brand name first, then generic name
-        let fromBrand  = try await queryNDC(field: "brand_name", value: name)
-        let fromGeneric = try await queryNDC(field: "generic_name", value: name)
-        let products = (fromBrand ?? []) + (fromGeneric ?? [])
+// MARK: - Small helpers
 
-        // Collect strengths from active_ingredients.strength
-        var options = Set<String>()
-        for p in products {
-            guard let ais = p.active_ingredients else { continue }
-            for ai in ais {
-                if let strength = ai.strength,
-                   let normalized = normalizeStrength(strength) {
-                    options.insert(normalized)
-                }
-            }
-        }
+private func cleanLabelText(_ raw: String) -> String {
+    // Normalize common bullet characters and excess whitespace.
+    var s = raw.replacingOccurrences(of: "\r", with: "\n")
+    s = s.replacingOccurrences(of: "•", with: "\n• ")
+    s = s.replacingOccurrences(of: " · ", with: " ")
+    // compress multiple newlines
+    while s.contains("\n\n\n") { s = s.replacingOccurrences(of: "\n\n\n", with: "\n\n") }
+    // trim spaces per line
+    s = s.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: "\n")
+    return s.trimmingCharacters(in: .whitespacesAndNewlines)
+}
 
-        // Return consistently sorted (numerical if possible, then lexicographic)
-        let sorted = options.sorted(by: strengthSort)
-        return sorted
-    }
+private func uniq<T: Hashable>(_ arr: [T]) -> [T] {
+    var seen = Set<T>(); var out: [T] = []
+    for x in arr { if !seen.contains(x) { out.append(x); seen.insert(x) } }
+    return out
+}
 
-    // MARK: - Private label helpers
-
-    private static func queryLabel(field: String, value: String) async throws -> LabelDoc? {
-        var comps = URLComponents(string: labelBase)!
-        let search = "\(field):\"\(value)\""
-        comps.queryItems = [
-            URLQueryItem(name: "search", value: search),
-            URLQueryItem(name: "limit", value: "1")
-        ]
-        guard let url = comps.url else { return nil }
-        let (data, resp) = try await URLSession.shared.data(from: url)
-        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
-        let decoded = try JSONDecoder().decode(LabelResponse.self, from: data)
-        return decoded.results?.first
-    }
-
-    private static func mapLabel(_ d: LabelDoc) -> MedDetails {
-        func join(_ arr: [String]?) -> String {
-            (arr ?? []).joined(separator: "\n\n")
-                .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        let title = d.openfda?.brand_name?.first ?? d.openfda?.generic_name?.first ?? "Drug information"
-        return MedDetails(
-            title: title,
-            uses: join(d.indications_and_usage),
-            dosage: join(d.dosage_and_administration),
-            interactions: join(d.drug_interactions),
-            warnings: join(d.warnings ?? d.warnings_and_cautions),
-            sideEffects: join(d.adverse_reactions),
-            ingredients: d.ingredients
-        )
-    }
-
-    // MARK: - Private NDC helpers
-
-    private static func queryNDC(field: String, value: String) async throws -> [NDCProduct]? {
-        var comps = URLComponents(string: ndcBase)!
-        // Exact phrase search for safety; bump limit to catch all presentations
-        let search = "\(field):\"\(value)\""
-        comps.queryItems = [
-            URLQueryItem(name: "search", value: search),
-            URLQueryItem(name: "limit", value: "50")
-        ]
-        guard let url = comps.url else { return nil }
-        let (data, resp) = try await URLSession.shared.data(from: url)
-        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
-        let decoded = try JSONDecoder().decode(NDCResponse.self, from: data)
-        return decoded.results
-    }
-
-    /// Normalize openFDA NDC strength strings into simple, user-friendly options.
-    /// Examples:
-    /// - "10 mg/1"         -> "10 mg"
-    /// - "10 mg/10 mL"     -> "10 mg"
-    /// - "250 mg/5 mL"     -> "250 mg"
-    /// - "20 mg/2"         -> "20 mg"
-    /// - "400 mg/5 ml"     -> "400 mg"
-    private static func normalizeStrength(_ s: String) -> String? {
-        // We only surface the numerator (first part) and unit (mg/mcg/g/mL) as a friendly dose option.
-        // This intentionally avoids concentration complexity for liquids; the "Amount" picker is for unit dose strengths,
-        // and liquids remain editable via manual entry if needed.
-        // Patterns we accept: "<number> <unit> / <something>"
-        // Fallback: if string is simple like "10 mg", keep it.
-
-        // Strip extra spaces and lowercase
-        let text = s
-            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-
-        // Quick match for a plain amount like "10 mg"
-        if let m = text.range(of: #"^\s*(\d+(?:\.\d+)?)\s*(mg|mcg|g|ml)\s*$"#, options: .regularExpression) {
-            let sub = String(text[m])
-            // normalize spacing and unit case
-            let parts = sub.split(separator: " ", omittingEmptySubsequences: true)
-            if parts.count == 2 { return "\(parts[0]) \(parts[1].uppercased())".replacingOccurrences(of: "ML", with: "mL") }
-        }
-
-        // Generic numerator/denominator pattern: "X unit / Y ..." -> take X unit
-        // Examples: "10 mg/1", "250 mg/5 mL", "1 g/10 mL"
-        let pattern = #"^\s*(\d+(?:\.\d+)?)\s*(mg|mcg|g)\s*/\s*[\d\.]+\s*[a-z]*\s*$"#
-        if let rx = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
-            let range = NSRange(text.startIndex..<text.endIndex, in: text)
-            if let m = rx.firstMatch(in: text, options: [], range: range),
-               m.numberOfRanges >= 3,
-               let rNum = Range(m.range(at: 1), in: text),
-               let rUnit = Range(m.range(at: 2), in: text) {
-                let num = String(text[rNum])
-                let unit = String(text[rUnit]).lowercased()
-                let capUnit = unit == "ml" ? "mL" : unit.uppercased()
-                return "\(num) \(capUnit)"
-            }
-        }
-
-        // If it's something like "10 mg/10 mL" we still want "10 mg"
-        if let m = text.range(of: #"^\s*(\d+(?:\.\d+)?)\s*(mg|mcg|g)\s*/"#, options: .regularExpression) {
-            // Extract numerator + unit
-            let sub = String(text[m])
-                .replacingOccurrences(of: "/", with: "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let parts = sub.split(separator: " ", omittingEmptySubsequences: true)
-            if parts.count >= 2 {
-                let unit = parts[1].lowercased()
-                let capUnit = unit == "ml" ? "mL" : unit.uppercased()
-                return "\(parts[0]) \(capUnit)"
-            }
-        }
-
-        // Last resort: try to find a number + unit at start
-        if let m = text.range(of: #"^\s*(\d+(?:\.\d+)?)\s*(mg|mcg|g|ml)\b"#, options: .regularExpression) {
-            let sub = String(text[m]).trimmingCharacters(in: .whitespaces)
-            let parts = sub.split(separator: " ", omittingEmptySubsequences: true)
-            if parts.count == 2 {
-                let unit = parts[1].lowercased()
-                let capUnit = unit == "ml" ? "mL" : unit.uppercased()
-                return "\(parts[0]) \(capUnit)"
-            }
-        }
-
-        return nil
-    }
-
-    private static func strengthSort(_ a: String, _ b: String) -> Bool {
-        // Attempt numeric-first sort (by mg/mcg/g); fallback to string compare
-        func parse(_ s: String) -> (Double, String)? {
-            let parts = s.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
-            guard parts.count == 2, let v = Double(parts[0]) else { return nil }
-            return (v, parts[1].lowercased())
-        }
-        if let pa = parse(a), let pb = parse(b), pa.1 == pb.1 {
-            return pa.0 < pb.0
-        }
-        return a.localizedStandardCompare(b) == .orderedAscending
-    }
+private func debugLog(_ s: String) {
+    #if DEBUG
+    print("[OpenFDAService] \(s)")
+    #endif
 }

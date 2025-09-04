@@ -169,10 +169,6 @@ struct MedListView: View {
     @State private var selectedImage: UIImage?
     @State private var showUploadReview = false
 
-    // NEW: camera presentation + error
-    @State private var showCamera = false
-    @State private var cameraErrorMessage: String? = nil
-
     @State private var editMed: LocalMed? = nil
     @State private var infoMed: LocalMed? = nil
     @State private var toDelete: LocalMed? = nil
@@ -200,11 +196,8 @@ struct MedListView: View {
                 } else {
                     List {
                         if repo.meds.isEmpty {
-                            ContentUnavailableView(
-                                "No medication added",
-                                systemImage: "pills",
-                                description: Text("Tap + to add your first medication.")
-                            )
+                            Text("No medications yet. Tap + to add.")
+                                .foregroundStyle(.secondary)
                         }
 
                         ForEach(repo.meds, id: \.id) { med in
@@ -251,8 +244,7 @@ struct MedListView: View {
                         Button { isPresentingPhotoPicker = true } label: {
                             HStack { Text("Upload Med Picture"); Spacer(minLength: 8); menuIcon("photo.on.rectangle") }
                         }
-                        // ✅ HOOKED UP: present the camera
-                        Button { showCamera = true } label: {
+                        Button { /* TODO: camera later */ } label: {
                             HStack { Text("Take a Picture of the Med"); Spacer(minLength: 8); menuIcon("camera") }
                         }
                     } label: { Image(systemName: "plus.circle.fill") }
@@ -271,21 +263,7 @@ struct MedListView: View {
                 .presentationDetents([.medium, .large])
             }
 
-            // ✅ NEW: Camera sheet
-            .sheet(isPresented: $showCamera) {
-                CameraCaptureView(
-                    onImage: { img in
-                        // pipe into your existing upload-review flow
-                        selectedImage = img
-                        showUploadReview = true
-                    },
-                    onError: { msg in
-                        cameraErrorMessage = msg
-                    }
-                )
-            }
-
-            // Upload photo review (unchanged)
+            // Upload photo review
             .sheet(isPresented: $showUploadReview) {
                 if let img = selectedImage {
                     UploadPhotoView(image: img) {
@@ -296,8 +274,6 @@ struct MedListView: View {
                     .presentationDetents([.medium, .large])
                 }
             }
-
-            // Photo picker (unchanged)
             .photosPicker(isPresented: $isPresentingPhotoPicker,
                           selection: $selectedItem,
                           matching: .images,
@@ -324,6 +300,14 @@ struct MedListView: View {
                 .presentationDetents([.medium, .large])
             }
 
+            // Add sheet (Firestore)
+            .sheet(isPresented: $showingAdd) {
+                AddLocalMedView { newMed in
+                    Task { await repo.add(newMed) }
+                }
+                .presentationDetents([.medium, .large])
+            }
+
             // Delete confirmation
             .alert("Delete this medication?",
                    isPresented: .constant(toDelete != nil),
@@ -338,17 +322,6 @@ struct MedListView: View {
             } message: { med in
                 Text("“\(med.name)” and its scheduled doses will be removed.")
             }
-
-            // ✅ Camera error alert
-            .alert("Camera unavailable", isPresented: Binding(
-                get: { cameraErrorMessage != nil },
-                set: { if !$0 { cameraErrorMessage = nil } }
-            )) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(cameraErrorMessage ?? "Please check camera permissions.")
-            }
-
             .onAppear { repo.start() }
         }
     }

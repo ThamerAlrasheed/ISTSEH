@@ -1,162 +1,179 @@
 import SwiftUI
 
-/// Read-only drug search powered by OpenFDAService.
-/// Shows Recent searches first. Searching lists only the drug name; details open on tap.
 struct SearchView: View {
     @State private var query: String = ""
     @State private var isSearching: Bool = false
-    @State private var resultNames: [String] = []
     @State private var errorText: String? = nil
 
-    @State private var searchTask: Task<Void, Never>? = nil
+    /// A single validated result (we only show rows that came from the API).
+    @State private var validatedResult: String? = nil
 
-    // Recent queries (persisted locally)
-    @AppStorage("search_recent_queries") private var recentJSON: String = "[]"
-
-    private var recentQueries: [String] {
-        get { (try? JSONDecoder().decode([String].self, from: Data(recentJSON.utf8))) ?? [] }
-        set {
-            if let data = try? JSONEncoder().encode(Array(newValue.prefix(10))) {
-                recentJSON = String(data: data, encoding: .utf8) ?? "[]"
-            }
-        }
-    }
+    /// Debounce + stale-response protection
+    @State private var debounceTask: Task<Void, Never>? = nil
+    @State private var latestToken: UUID = UUID()
+    @State private var lastSearchedText: String = ""
 
     var body: some View {
         NavigationStack {
             List {
-                // MARK: Recent searches (always visible on open)
-                if !recentQueries.isEmpty {
-                    Section("Recent searches") {
-                        ForEach(recentQueries, id: \.self) { q in
-                            Button {
-                                query = q
-                                triggerSearch()
-                            } label: {
-                                HStack {
-                                    Image(systemName: "magnifyingglass")
-                                    Text(q)
-                                    Spacer()
-                                }
+                // Search box
+                Section {
+                    HStack {
+                        Image(systemName: "magnifyingglass")
+                        TextField("Search medicine name", text: $query)
+                            .textInputAutocapitalization(.words)
+                            .autocorrectionDisabled()
+                            .onChange(of: query) { _, newValue in
+                                scheduleDebouncedAPI(for: newValue)
                             }
-                        }
-                        .onDelete { idx in
-                            var cur = recentQueries
-                            cur.remove(atOffsets: idx)
-                            updateRecents(cur)
-                        }
-                        Button(role: .destructive) {
-                            updateRecents([])
-                        } label: {
-                            Label("Clear all", systemImage: "trash")
+                            .submitLabel(.search)
+                            .onSubmit { Task { await runSearch(force: true) } }
+
+                        if !query.isEmpty {
+                            Button {
+                                query = ""
+                                resetState()
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                 }
 
-                // MARK: Results
+                // STATES
                 if isSearching {
+                    Section { HStack { ProgressView(); Text("Searching…") } }
+                } else if let err = errorText {
                     Section {
-                        HStack {
-                            ProgressView()
-                            Text("Searching…")
+                        ContentUnavailableView("Couldn't search",
+                                              systemImage: "exclamationmark.triangle",
+                                              description: Text(err))
+                    }
+                } else if let result = validatedResult {
+                    // We only show a row if we *already* validated it with the API
+                    Section(header: Text("Results")) {
+                        NavigationLink {
+                            // Pass the same label to show on top; details will still prefer the
+                            // API’s canonical title if it’s clean (fallback = this label).
+                            MedDetailView(medName: result, displayTitle: result)
+                        } label: {
+                            Text(result)
                         }
                     }
-                } else if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    if !resultNames.isEmpty {
-                        Section("Results") {
-                            ForEach(resultNames, id: \.self) { name in
-                                NavigationLink {
-                                    // Open details ONLY when tapped
-                                    MedDetailView(medName: name)
-                                } label: {
-                                    HStack(spacing: 12) {
-                                        Image(systemName: "pills.fill")
-                                            .foregroundStyle(.secondary)
-                                        Text(name)
-                                        Spacer()
-                                    }
-                                }
-                                .simultaneousGesture(TapGesture().onEnded {
-                                    // Update recents on selection (MRU, unique)
-                                    var cur = recentQueries.filter { $0.caseInsensitiveCompare(name) != .orderedSame }
-                                    cur.insert(name, at: 0)
-                                    updateRecents(cur)
-                                })
-                            }
-                        }
-                    } else if let err = errorText {
-                        Section("Results") {
-                            ContentUnavailableView("No results", systemImage: "magnifyingglass", description: Text(err))
-                        }
-                    } else {
-                        // Query present but no results yet (e.g., very short query)
-                        EmptyView()
-                    }
-                } else if recentQueries.isEmpty {
-                    // Fully empty state (no query, no recents)
+                } else {
+                    // No validated result for the current text
                     Section {
-                        ContentUnavailableView(
-                            "Search medicines",
-                            systemImage: "magnifyingglass",
-                            description: Text("Type a medicine name to read FDA-based information. This won’t add anything to your meds.")
-                        )
+                        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if trimmed.isEmpty || trimmed.count < 3 {
+                            ContentUnavailableView("Start typing to search",
+                                                  systemImage: "magnifyingglass",
+                                                  description: Text("Type at least 3 characters."))
+                        } else {
+                            ContentUnavailableView("No results for “\(trimmed)”",
+                                                  systemImage: "doc.text.magnifyingglass",
+                                                  description: Text("Try a different spelling or use a brand/generic name."))
+                        }
                     }
                 }
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Search")
-            .searchable(text: $query, placement: .navigationBarDrawer, prompt: "Search medicines")
-            .onSubmit(of: .search) { triggerSearch() }
-            .onChange(of: query) { newValue in
-                // Debounce typing
-                searchTask?.cancel()
-                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard trimmed.count >= 3 else {
-                    // Reset results while typing short strings
-                    resultNames = []
-                    errorText = nil
-                    return
-                }
-                searchTask = Task {
-                    try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
-                    await runSearch(for: trimmed)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Search") { Task { await runSearch(force: true) } }
+                        .disabled(query.trimmingCharacters(in: .whitespaces).count < 3)
                 }
             }
         }
     }
 
-    // MARK: - Helpers
+    // MARK: - Debounce & API
 
-    private func updateRecents(_ new: [String]) {
-        if let data = try? JSONEncoder().encode(Array(new.prefix(10))) {
-            recentJSON = String(data: data, encoding: .utf8) ?? "[]"
+    private func scheduleDebouncedAPI(for text: String) {
+        debounceTask?.cancel()
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard trimmed.count >= 3 else {
+            // Reset UI to idle when input is too short
+            resetState()
+            return
+        }
+
+        // Avoid hammering API on the same string repeatedly
+        if trimmed.caseInsensitiveCompare(lastSearchedText) == .orderedSame { return }
+
+        debounceTask = Task { [trimmed] in
+            try? await Task.sleep(nanoseconds: 450_000_000) // ~450ms
+            await runSearch(force: false, queryOverride: trimmed)
         }
     }
 
-    private func triggerSearch() {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count >= 2 else { return }
-        Task { await runSearch(for: trimmed) }
-    }
+    /// Calls the API once for the given query. If the API returns data, we show exactly one result row.
+    /// If it returns nil, we show "No results" (no fake clickable items).
+    private func runSearch(force: Bool, queryOverride: String? = nil) async {
+        let q = (queryOverride ?? query).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard q.count >= 3 else { return }
+        if !force, q.caseInsensitiveCompare(lastSearchedText) == .orderedSame { return }
 
-    @MainActor
-    private func runSearch(for name: String) async {
-        isSearching = true
-        errorText = nil
-        resultNames = []
-        defer { isSearching = false }
+        let token = UUID()
+        latestToken = token
+        await MainActor.run {
+            isSearching = true
+            errorText = nil
+            validatedResult = nil
+        }
 
         do {
-            // We keep this simple and reliable: ask for details to validate the name,
-            // then show only the resolved title as a clickable row.
-            if let details = try await OpenFDAService.fetchDetails(forName: name) {
-                self.resultNames = [details.title]
-                // Do NOT push details here; only on user tap via NavigationLink above.
+            // We validate by actually fetching details from your service layer.
+            if let details = try await OpenFDAService.fetchDetails(forName: q) {
+                // Use API’s canonical title if it looks good; fallback to the query that worked.
+                let apiTitle = details.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                let display = cleanTitle(apiTitle) ?? q
+
+                // Only apply if this is the latest outstanding request
+                guard token == latestToken else { return }
+                await MainActor.run {
+                    self.validatedResult = display
+                    self.isSearching = false
+                    self.lastSearchedText = q
+                }
             } else {
-                errorText = "Couldn’t find an FDA label for “\(name)”. Try a brand or generic name."
+                // Only apply if latest
+                guard token == latestToken else { return }
+                await MainActor.run {
+                    self.validatedResult = nil   // -> No results section shows
+                    self.isSearching = false
+                    self.lastSearchedText = q
+                }
             }
         } catch {
-            errorText = "Network error. Please try again."
+            guard token == latestToken else { return }
+            await MainActor.run {
+                self.errorText = "Search failed. Please try again."
+                self.isSearching = false
+                self.validatedResult = nil
+            }
         }
+    }
+
+    private func resetState() {
+        isSearching = false
+        errorText = nil
+        validatedResult = nil
+        lastSearchedText = ""
+        latestToken = UUID()
+    }
+
+    /// Simple sanity filter for titles; returns nil for obviously bogus header strings.
+    private func cleanTitle(_ t: String) -> String? {
+        let trimmed = t.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 80 else { return nil }
+        // Approve titles that look like normal drug names (reject all-caps headers etc.)
+        if trimmed.range(of: #"^[A-Z][A-Za-z0-9 ()\-/.,]+$"#, options: .regularExpression) == nil {
+            return nil
+        }
+        return trimmed
     }
 }

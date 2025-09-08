@@ -60,27 +60,36 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
 
     // MARK: Setup
 
+    /// Optional: Call once at app start if you want.
     func configure() {
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         registerCategories(center: center)
     }
 
+    /// Ask for permission. Also ensures categories are registered and delegate is set,
+    /// so things work even if `configure()` wasn't called elsewhere.
+    @discardableResult
     func requestAuthorization() async -> Bool {
+        let center = UNUserNotificationCenter.current()
         do {
-            let ok = try await UNUserNotificationCenter.current()
-                .requestAuthorization(options: [.alert, .sound, .badge])
+            let ok = try await center.requestAuthorization(options: [.alert, .sound, .badge])
+            center.delegate = self
+            registerCategories(center: center)
             return ok
         } catch {
+            // Still ensure categories/delegate so action handling works if user had already granted perms earlier.
+            center.delegate = self
+            registerCategories(center: center)
             return false
         }
     }
 
     private func registerCategories(center: UNUserNotificationCenter = .current()) {
-        // Doses: include a "Done" button to tick from the notification itself
+        // Doses: include a "Took the dose" button to tick from the notification itself
         let done = UNNotificationAction(
             identifier: IDs.actionDoseDone,
-            title: "Done",
+            title: "Took the dose ✅",
             options: [.authenticationRequired] // require unlock for safety
         )
         let dose = UNNotificationCategory(
@@ -136,7 +145,7 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
 
     // MARK: UNUserNotificationCenterDelegate
 
-    /// Handle "Done" action for dose notifications (works in background).
+    /// Handle "Took the dose ✅" action for dose notifications (works in background).
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
@@ -146,20 +155,20 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
 
         if action == IDs.actionDoseDone {
             if let doseKey = info["doseKey"] as? String {
-                // mark done and cancel follow-up notifications for this dose
+                // Mark done and cancel follow-up notifications for this dose
                 CompletionStore.markDoseDone(doseKey)
                 let followupId = "DOSE_FU_" + doseKey
                 self.cancel(ids: [followupId])
             }
         }
 
-        // If the user dismissed the dose notification without tapping Done,
+        // If the user dismissed the dose notification without tapping the action,
         // we do nothing — the follow-up (if scheduled) will still fire.
 
         completionHandler()
     }
 
-    // Make notifications show while app is in foreground.
+    /// Show notifications while app is in foreground.
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
         return [.banner, .sound, .list]

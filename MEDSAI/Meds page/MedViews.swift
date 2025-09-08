@@ -159,7 +159,7 @@ final class UserMedsRepo: ObservableObject {
     }
 }
 
-// MARK: - Meds tab (now per-user via Firestore)
+// MARK: - Meds tab (per-user via Firestore)
 struct MedListView: View {
     @StateObject private var repo = UserMedsRepo()
 
@@ -290,10 +290,10 @@ struct MedListView: View {
                 }
             }
 
-            // FDA info sheet
+            // FDA info sheet (from Meds list)
             .sheet(item: $infoMed) { med in
                 NavigationStack {
-                    MedDetailView(medName: med.name)
+                    MedDetailView(medName: med.name, displayTitle: med.name)
                         .navigationTitle("Details")
                         .navigationBarTitleDisplayMode(.inline)
                 }
@@ -659,13 +659,27 @@ struct UploadPhotoView: View {
     }
 }
 
-// MARK: - FDA info view (unchanged logic, uses your OpenFDA + Parser)
+// MARK: - FDA info view
 struct MedDetailView: View {
+    /// Name used for API lookups (can be normalized)
     let medName: String
+    /// Name to show to the user (exact label they clicked/added)
+    let displayTitle: String?
+
+    /// Prefer the API title if it looks clean.
+    private let preferApiTitle = true
+
+    // Backwards-compat constructor
+    init(medName: String, displayTitle: String? = nil) {
+        self.medName = medName
+        self.displayTitle = displayTitle
+    }
+
     @State private var loading = true
     @State private var details: MedDetails?
     @State private var essentials: MedEssentials?
     @State private var errorText: String?
+    @State private var headerTitle: String = ""
 
     var body: some View {
         ScrollView {
@@ -673,7 +687,10 @@ struct MedDetailView: View {
                 if loading {
                     ProgressView("Loading info…")
                 } else if let e = essentials {
-                    Text(e.title).font(.largeTitle).bold().padding(.bottom, 4)
+                    Text(headerTitle)
+                        .font(.largeTitle).bold()
+                        .padding(.bottom, 4)
+
                     if !e.quickTips.isEmpty { WrapChips(items: e.quickTips) }
                     if !e.whatFor.isEmpty { InfoSection(title: "What it’s for", bullets: e.whatFor) }
                     if !e.howToTake.isEmpty { InfoSection(title: "How to take", bullets: e.howToTake) }
@@ -692,13 +709,21 @@ struct MedDetailView: View {
                     Text("Source: FDA drug labels. This is educational information — not medical advice.")
                         .font(.footnote).foregroundStyle(.secondary).padding(.top, 8)
                 } else {
-                    Text(errorText ?? "Couldn’t find information.").foregroundStyle(.secondary)
+                    // No data from API → clear, friendly empty state (no blank page)
+                    ContentUnavailableView("No FDA information found",
+                                           systemImage: "doc.text.magnifyingglass",
+                                           description: Text("We couldn’t find a drug label for “\(headerTitle)”. Try another spelling or a generic/brand name."))
+                        .padding(.top, 16)
                 }
             }
             .padding()
         }
-        .navigationTitle("Medicine info")
+        .navigationTitle(headerTitle)
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            // Start exactly with what the user saw/tapped
+            self.headerTitle = (displayTitle?.isEmpty == false ? displayTitle! : medName)
+        }
         .task { await load() }
     }
 
@@ -708,16 +733,33 @@ struct MedDetailView: View {
             if let d = try await OpenFDAService.fetchDetails(forName: medName) {
                 self.details = d
                 self.essentials = MedSummarizer.essentials(from: d)
+
+                if preferApiTitle, let clean = cleanTitle(d.title) {
+                    self.headerTitle = clean
+                }
             } else {
-                errorText = "No FDA label found for “\(medName)”. Try another name."
+                // keep headerTitle as user-visible label; show empty-state UI
+                self.details = nil
+                self.essentials = nil
             }
         } catch {
-            errorText = "Couldn’t fetch data."
+            self.details = nil
+            self.essentials = nil
+            self.errorText = "Couldn’t fetch data."
         }
+    }
+
+    private func cleanTitle(_ t: String) -> String? {
+        let trimmed = t.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 80 else { return nil }
+        if trimmed.range(of: #"^[A-Z][A-Za-z0-9 ()\-/.,]+$"#, options: .regularExpression) == nil {
+            return nil
+        }
+        return trimmed
     }
 }
 
-// MARK: - Small reusable views (unchanged)
+// MARK: - Small reusable views
 private struct InfoSection: View {
     let title: String
     let bullets: [String]

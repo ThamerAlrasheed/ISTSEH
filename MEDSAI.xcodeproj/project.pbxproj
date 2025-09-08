@@ -37,9 +37,22 @@
 		040BD0EB2E4F8D9700E44F60 /* MEDSAIUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MEDSAIUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		0406DF772E6CB61F001C63D2 /* Exceptions for "MEDSAI" folder in "MEDSAI" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 040BD0D12E4F8D9500E44F60 /* MEDSAI */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		040BD0D42E4F8D9500E44F60 /* MEDSAI */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				0406DF772E6CB61F001C63D2 /* Exceptions for "MEDSAI" folder in "MEDSAI" target */,
+			);
 			path = MEDSAI;
 			sourceTree = "<group>";
 		};
@@ -406,6 +419,8 @@
 				DEVELOPMENT_TEAM = 48389DB5RF;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MEDSAI/Info.plist;
+				INFOPLIST_KEY_NSCameraUsageDescription = "We use the camera to scan medication labels.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -438,6 +453,8 @@
 				DEVELOPMENT_TEAM = 48389DB5RF;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MEDSAI/Info.plist;
+				INFOPLIST_KEY_NSCameraUsageDescription = "We use the camera to scan medication labels.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

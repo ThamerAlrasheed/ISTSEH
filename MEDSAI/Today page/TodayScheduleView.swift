@@ -3,15 +3,11 @@ import UserNotifications
 
 /// "Today" page:
 /// - Shows today's Appointments (tap to see details) with a checkmark.
-/// - Shows today's Doses from the Scheduler (each with a checkmark).
-/// - Notifications:
-///     • Appointments: 1 day before, and 30 minutes before (name + type emoji + location)
-///     • Doses: at time; if not ticked, follow-up in 15 minutes with "Did you take your med?"
-///       Dose notifications include a "Done" action to tick from outside the app.
-struct TodayView: View {
+/// - Shows today's Doses from midnight → **tomorrow’s wake time** (includes sleeping window).
+struct TodayScheduleView: View {
     @EnvironmentObject var settings: AppSettings
 
-    // Repos (match the ones used in Schedule)
+    // Repos (match your project types)
     @StateObject private var medsRepo = UserMedsRepo()
     @StateObject private var apptsRepo = AppointmentsRepo()
 
@@ -47,7 +43,7 @@ struct TodayView: View {
                         Task { await scheduleNotificationsForToday() }
                     }
                 } footer: {
-                    Text("Appointments: a day before and 30 min before. Doses: at time; follow-up in 15 minutes if not ticked.")
+                    Text("Appointments: a day before (15 min before your bedtime) and 30 min before. Doses: at time; follow-up in 15 minutes if not ticked.")
                 }
             }
             .listStyle(.insetGrouped)
@@ -62,19 +58,20 @@ struct TodayView: View {
                 completedAppointments = CompletionStore.completedAppointments()
                 completedDoseKeys = CompletionStore.completedDoses()
 
-                Task { await NotificationsManager.shared.requestAuthorization()
-                       await scheduleNotificationsForToday() }
+                Task {
+                    await NotificationsManager.shared.requestAuthorization()
+                    await scheduleNotificationsForToday()
+                }
             }
             .onChange(of: medsRepo.meds) { _, _ in
                 recomputeDoses()
                 Task { await scheduleNotificationsForToday() }
             }
-            .onChange(of: settings.breakfast) { _, _ in changes() }
-            .onChange(of: settings.lunch)     { _, _ in changes() }
-            .onChange(of: settings.dinner)    { _, _ in changes() }
-            .onChange(of: settings.bedtime)   { _, _ in changes() }
-            .onChange(of: settings.wakeup)    { _, _ in changes() }
-            // Detail sheet for appointments
+            .onChange(of: settings.breakfast) { _, _ in reactToSettings() }
+            .onChange(of: settings.lunch)     { _, _ in reactToSettings() }
+            .onChange(of: settings.dinner)    { _, _ in reactToSettings() }
+            .onChange(of: settings.bedtime)   { _, _ in reactToSettings() }
+            .onChange(of: settings.wakeup)    { _, _ in reactToSettings() }
             .sheet(item: $viewingAppointment) { appt in
                 AppointmentDetailSheet(appointment: appt)
                     .presentationDetents([.medium, .large])
@@ -82,7 +79,7 @@ struct TodayView: View {
         }
     }
 
-    private func changes() {
+    private func reactToSettings() {
         recomputeDoses()
         Task { await scheduleNotificationsForToday() }
     }
@@ -106,13 +103,11 @@ struct TodayView: View {
                 ForEach(items) { appt in
                     TodayRow(
                         isDone: completedAppointments.contains(appt.id),
-                        leadingIcon: "", // title already includes emoji via titleWithEmoji
+                        leadingIcon: "",
                         title: appt.titleWithEmoji,
                         subtitle: apptSubtitle(appt),
                         timeText: timeOnly(appt.date),
-                        toggle: {
-                            toggleAppointment(appt.id)
-                        },
+                        toggle: { toggleAppointment(appt.id) },
                         onTap: { viewingAppointment = appt }
                     )
                 }
@@ -142,15 +137,13 @@ struct TodayView: View {
                     isDone: completedDoseKeys.contains(key),
                     leadingIcon: "💊",
                     title: med.name,
-                    subtitle: "\(med.dosage) • \(foodRuleLabel(med.foodRule))",
+                    subtitle: "\(med.dosage) • \(med.frequencyPerDay)x/day • \(med.foodRule.label)",
                     timeText: time.formatted(date: .omitted, time: .shortened),
                     toggle: {
                         toggleDose(key)
-                        // Cancel 15-min follow-up if user ticks in-app
                         NotificationsManager.shared.cancel(ids: ["DOSE_FU_\(key)"])
                     },
                     onTap: {
-                        // For now, tapping dose toggles done
                         toggleDose(key)
                         NotificationsManager.shared.cancel(ids: ["DOSE_FU_\(key)"])
                     }
@@ -159,7 +152,7 @@ struct TodayView: View {
         }
     }
 
-    // MARK: - Build Doses for today
+    // MARK: - Build Doses for today (midnight → tomorrow's wake)
 
     private func recomputeDoses() {
         guard medsRepo.isSignedIn else {
@@ -167,9 +160,22 @@ struct TodayView: View {
             return
         }
 
+        let cal = Calendar.current
+        let dayStart = cal.startOfDay(for: today)
+        let dayEnd   = cal.date(byAdding: .day, value: 1, to: dayStart)!
+
+        // Wider "today" window upper bound = **tomorrow's wake**
+        let nextWake = cal.date(
+            bySettingHour: settings.wakeup.hour ?? 7,
+            minute: settings.wakeup.minute ?? 0,
+            second: 0,
+            of: dayEnd
+        ) ?? dayEnd.addingTimeInterval(7 * 3600)
+
+        // Day-overlap: treat meds starting later today as active today
         let active = medsRepo.meds.filter { med in
             guard !med.isArchived else { return false }
-            return (med.startDate ... med.endDate).contains(today)
+            return med.startDate < dayEnd && med.endDate >= dayStart
         }
         guard !active.isEmpty else {
             todaysDoses = []
@@ -195,51 +201,65 @@ struct TodayView: View {
         let pairs = Scheduler.buildAdherenceSchedule(
             meds: adapted,
             settings: settings,
-            date: today
+            date: dayStart
         )
 
+        // Map back to LocalMed for display, filtering to today (incl. sleeping window)
         let byId: [String: LocalMed] = Dictionary(uniqueKeysWithValues: active.map { ($0.id, $0) })
-        let display: [(Date, LocalMed)] = pairs.compactMap { (t, med) in
-            guard let local = byId[med.id] else { return nil }
-            return (t, local)
-        }
-        todaysDoses = display.sorted { $0.0 < $1.0 }
+        todaysDoses = pairs
+            .filter { (t, _) in t >= dayStart && t < nextWake }
+            .compactMap { (t, med) in byId[med.id].map { (t, $0) } }
+            .sorted { $0.0 < $1.0 }
     }
 
     // MARK: - Notifications (for *today*)
 
     private func scheduleNotificationsForToday() async {
-        // Ask permission (safe to call repeatedly)
         _ = await NotificationsManager.shared.requestAuthorization()
 
-        // Build IDs and cancel existing to prevent duplicates
         let idsToCancel = buildAllNotificationIDsForToday()
         NotificationsManager.shared.cancel(ids: idsToCancel)
 
-        // Appointments: schedule one day before + 30 minutes before (future only)
+        // Appointments: schedule (1) day-before at user's bedtime - 15 min, (2) 30 minutes before appointment
         let appts = apptsRepo.appointments(on: today)
         for appt in appts {
             let t = appt.date
-            let dayBefore = Calendar.current.date(byAdding: .day, value: -1, to: t) ?? t
+
+            // (1) Day-before reminder at user's bedtime - 15 minutes (on the day BEFORE the appointment)
+            if let dayBefore = Calendar.current.date(byAdding: .day, value: -1, to: t) {
+                // Build the bedtime for THAT day
+                let bedtimeForPrevDay = Calendar.current.date(
+                    bySettingHour: settings.bedtime.hour ?? 22,
+                    minute: settings.bedtime.minute ?? 0,
+                    second: 0,
+                    of: Calendar.current.startOfDay(for: dayBefore)
+                ) ?? dayBefore
+                let fifteenBeforeBed = bedtimeForPrevDay.addingTimeInterval(-15 * 60)
+
+                let title1 = "Appointment tomorrow"
+                var body1 = timeOnly(t)
+                if let loc = appt.location, !loc.isEmpty { body1 += " • \(loc)" }
+
+                NotificationsManager.shared.schedule(
+                    id: "APPT_1D_\(appt.id)",
+                    title: title1,
+                    body: body1,
+                    at: fifteenBeforeBed,
+                    categoryId: NotificationsManager.IDs.apptCategory,
+                    userInfo: ["appointmentId": appt.id]
+                )
+            }
+
+            // (2) 30 minutes before appointment with the exact wording you asked
             let thirtyBefore = t.addingTimeInterval(-30 * 60)
+            let title2 = "Appointment reminder"
+            let plainName = appt.title // not the emoji variant, matches your wording
+            let body2 = "Your “\(plainName)” appointment is in 30 mins"
 
-            let title = "Appointment: \(appt.titleWithEmoji)"
-            var body = timeOnly(t)
-            if let loc = appt.location, !loc.isEmpty { body += " • \(loc)" }
-
-            // IDs: APPT_1D_<id> and APPT_30_<id>
-            NotificationsManager.shared.schedule(
-                id: "APPT_1D_\(appt.id)",
-                title: title,
-                body: body,
-                at: dayBefore,
-                categoryId: NotificationsManager.IDs.apptCategory,
-                userInfo: ["appointmentId": appt.id]
-            )
             NotificationsManager.shared.schedule(
                 id: "APPT_30_\(appt.id)",
-                title: title,
-                body: body,
+                title: title2,
+                body: body2,
                 at: thirtyBefore,
                 categoryId: NotificationsManager.IDs.apptCategory,
                 userInfo: ["appointmentId": appt.id]
@@ -252,7 +272,6 @@ struct TodayView: View {
             let title = "Time to take \(med.name)"
             let body = "\(med.dosage) • \(foodRuleLabel(med.foodRule))"
 
-            // Main dose ping
             NotificationsManager.shared.schedule(
                 id: "DOSE_\(key)",
                 title: title,
@@ -262,7 +281,6 @@ struct TodayView: View {
                 userInfo: ["doseKey": key]
             )
 
-            // Follow-up (only schedule if not already completed)
             if !completedDoseKeys.contains(key) {
                 let fu = time.addingTimeInterval(15 * 60)
                 NotificationsManager.shared.schedule(
@@ -276,8 +294,6 @@ struct TodayView: View {
             }
         }
     }
-
-    private func notificationID(kind: String, key: String) -> String { "\(kind)_\(key)" }
 
     private func buildAllNotificationIDsForToday() -> [String] {
         var ids: [String] = []

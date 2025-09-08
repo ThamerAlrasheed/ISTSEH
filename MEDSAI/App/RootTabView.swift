@@ -5,7 +5,7 @@ struct RootTabView: View {
 
     var body: some View {
         TabView(selection: $selection) {
-            TodayView()
+            TodayScheduleView()
                 .tabItem {
                     Image(systemName: "calendar.badge.clock")
                     Text("Today")

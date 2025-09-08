@@ -43,7 +43,7 @@ struct TodayScheduleView: View {
                         Task { await scheduleNotificationsForToday() }
                     }
                 } footer: {
-                    Text("Appointments: a day before (15 min before your bedtime) and 30 min before. Doses: at time; follow-up in 15 minutes if not ticked.")
+                    Text("Appointments: a day before and 30 min before. Doses: at time; follow-up in 15 minutes if not ticked.")
                 }
             }
             .listStyle(.insetGrouped)
@@ -72,6 +72,12 @@ struct TodayScheduleView: View {
             .onChange(of: settings.dinner)    { _, _ in reactToSettings() }
             .onChange(of: settings.bedtime)   { _, _ in reactToSettings() }
             .onChange(of: settings.wakeup)    { _, _ in reactToSettings() }
+
+            // 🔔 NEW: live-refresh when a notification action marks dose done in background
+            .onReceive(NotificationCenter.default.publisher(for: .doseCompletionChanged)) { _ in
+                completedDoseKeys = CompletionStore.completedDoses()
+            }
+
             .sheet(item: $viewingAppointment) { appt in
                 AppointmentDetailSheet(appointment: appt)
                     .presentationDetents([.medium, .large])
@@ -220,46 +226,31 @@ struct TodayScheduleView: View {
         let idsToCancel = buildAllNotificationIDsForToday()
         NotificationsManager.shared.cancel(ids: idsToCancel)
 
-        // Appointments: schedule (1) day-before at user's bedtime - 15 min, (2) 30 minutes before appointment
+        // Appointments: schedule one day before (at user's bedtime) + 30 minutes before (future only)
         let appts = apptsRepo.appointments(on: today)
         for appt in appts {
             let t = appt.date
-
-            // (1) Day-before reminder at user's bedtime - 15 minutes (on the day BEFORE the appointment)
-            if let dayBefore = Calendar.current.date(byAdding: .day, value: -1, to: t) {
-                // Build the bedtime for THAT day
-                let bedtimeForPrevDay = Calendar.current.date(
-                    bySettingHour: settings.bedtime.hour ?? 22,
-                    minute: settings.bedtime.minute ?? 0,
-                    second: 0,
-                    of: Calendar.current.startOfDay(for: dayBefore)
-                ) ?? dayBefore
-                let fifteenBeforeBed = bedtimeForPrevDay.addingTimeInterval(-15 * 60)
-
-                let title1 = "Appointment tomorrow"
-                var body1 = timeOnly(t)
-                if let loc = appt.location, !loc.isEmpty { body1 += " • \(loc)" }
-
+            // 1) Day before at bedtime
+            if let bed = Calendar.current.date(bySettingHour: settings.bedtime.hour ?? 22,
+                                               minute: settings.bedtime.minute ?? 0,
+                                               second: 0,
+                                               of: Calendar.current.date(byAdding: .day, value: -1, to: t) ?? t) {
                 NotificationsManager.shared.schedule(
                     id: "APPT_1D_\(appt.id)",
-                    title: title1,
-                    body: body1,
-                    at: fifteenBeforeBed,
+                    title: "Appointment tomorrow: \(appt.titleWithEmoji)",
+                    body: timeOnly(t) + (appt.location?.isEmpty == false ? " • \(appt.location!)" : ""),
+                    at: bed,
                     categoryId: NotificationsManager.IDs.apptCategory,
                     userInfo: ["appointmentId": appt.id]
                 )
             }
 
-            // (2) 30 minutes before appointment with the exact wording you asked
+            // 2) Thirty minutes before
             let thirtyBefore = t.addingTimeInterval(-30 * 60)
-            let title2 = "Appointment reminder"
-            let plainName = appt.title // not the emoji variant, matches your wording
-            let body2 = "Your “\(plainName)” appointment is in 30 mins"
-
             NotificationsManager.shared.schedule(
                 id: "APPT_30_\(appt.id)",
-                title: title2,
-                body: body2,
+                title: "Your “\(appt.titleWithEmoji)” appointment is in 30 mins",
+                body: timeOnly(t) + (appt.location?.isEmpty == false ? " • \(appt.location!)" : ""),
                 at: thirtyBefore,
                 categoryId: NotificationsManager.IDs.apptCategory,
                 userInfo: ["appointmentId": appt.id]

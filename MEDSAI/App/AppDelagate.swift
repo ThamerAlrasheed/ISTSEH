@@ -1,22 +1,23 @@
+// AppDelegate.swift
 import UIKit
 import FirebaseCore
-#if DEBUG
-import FirebaseAppCheck
-#endif
+import UserNotifications
 
-final class AppDelegate: NSObject, UIApplicationDelegate {
+class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
-                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
 
-        // Allow Firestore in dev/simulator without real device attestation
-        #if DEBUG
-        AppCheck.setAppCheckProviderFactory(AppCheckDebugProviderFactory())
-        #endif
-
-        // Configure Firebase once at launch
+        // Firebase (your project already uses it)
         if FirebaseApp.app() == nil {
             FirebaseApp.configure()
         }
+
+        // Notifications: delegate + categories
+        NotificationsManager.shared.configure()
+
+        // (Optional) Ask for permission right away; you also request later in Today view.
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+
         return true
     }
 }

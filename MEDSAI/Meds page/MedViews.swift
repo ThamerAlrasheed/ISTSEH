@@ -721,7 +721,7 @@ struct MedDetailView: View {
         .navigationTitle(headerTitle)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            // Start exactly with what the user saw/tapped
+            // Start with what the user tapped
             self.headerTitle = (displayTitle?.isEmpty == false ? displayTitle! : medName)
         }
         .task { await load() }
@@ -730,7 +730,8 @@ struct MedDetailView: View {
     private func load() async {
         loading = true; defer { loading = false }
         do {
-            if let d = try await OpenFDAService.fetchDetails(forName: medName) {
+            if let d = try await OpenFDAService.fetchDetails(forName: medName),
+               isMeaningful(d) {
                 self.details = d
                 self.essentials = MedSummarizer.essentials(from: d)
 
@@ -747,6 +748,24 @@ struct MedDetailView: View {
             self.essentials = nil
             self.errorText = "Couldn’t fetch data."
         }
+    }
+
+    private func isMeaningful(_ d: MedDetails) -> Bool {
+        let titleOK: Bool = {
+            let t = d.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !t.isEmpty, t.count <= 120 else { return false }
+            if t.range(of: #"^[A-Z ]{10,}$"#, options: .regularExpression) != nil { return false }
+            return true
+        }()
+
+        let bodyOK =
+            d.combinedText.replacingOccurrences(of: "\\s", with: "", options: .regularExpression).count > 200
+            || !d.uses.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !d.dosage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !d.warnings.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !d.sideEffects.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+        return titleOK && bodyOK
     }
 
     private func cleanTitle(_ t: String) -> String? {

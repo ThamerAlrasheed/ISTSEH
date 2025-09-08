@@ -5,86 +5,85 @@ struct SearchView: View {
     @State private var isSearching: Bool = false
     @State private var errorText: String? = nil
 
-    /// A single validated result (we only show rows that came from the API).
+    // A single validated display name to show as a clickable result
     @State private var validatedResult: String? = nil
 
-    /// Debounce + stale-response protection
+    // Explicit "no results" state after a completed lookup
+    @State private var noResults: Bool = false
+
+    // Debounce + stale-response protection
     @State private var debounceTask: Task<Void, Never>? = nil
     @State private var latestToken: UUID = UUID()
     @State private var lastSearchedText: String = ""
 
     var body: some View {
         NavigationStack {
-            List {
-                // Search box
-                Section {
-                    HStack {
-                        Image(systemName: "magnifyingglass")
-                        TextField("Search medicine name", text: $query)
-                            .textInputAutocapitalization(.words)
-                            .autocorrectionDisabled()
-                            .onChange(of: query) { _, newValue in
-                                scheduleDebouncedAPI(for: newValue)
-                            }
-                            .submitLabel(.search)
-                            .onSubmit { Task { await runSearch(force: true) } }
-
-                        if !query.isEmpty {
-                            Button {
-                                query = ""
-                                resetState()
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundStyle(.secondary)
-                            }
-                            .buttonStyle(.plain)
+            Group {
+                if isSearching {
+                    List {
+                        Section { HStack { ProgressView(); Text("Searching…") } }
+                    }
+                } else if let err = errorText {
+                    List {
+                        Section {
+                            ContentUnavailableView(
+                                "Couldn't search",
+                                systemImage: "exclamationmark.triangle",
+                                description: Text(err)
+                            )
                         }
                     }
-                }
-
-                // STATES
-                if isSearching {
-                    Section { HStack { ProgressView(); Text("Searching…") } }
-                } else if let err = errorText {
-                    Section {
-                        ContentUnavailableView("Couldn't search",
-                                              systemImage: "exclamationmark.triangle",
-                                              description: Text(err))
-                    }
                 } else if let result = validatedResult {
-                    // We only show a row if we *already* validated it with the API
-                    Section(header: Text("Results")) {
-                        NavigationLink {
-                            // Pass the same label to show on top; details will still prefer the
-                            // API’s canonical title if it’s clean (fallback = this label).
-                            MedDetailView(medName: result, displayTitle: result)
-                        } label: {
-                            Text(result)
+                    // We have a meaningful API-backed result: show one clean, clickable row
+                    List {
+                        Section(header: Text("Results")) {
+                            NavigationLink {
+                                // Keep the displayTitle consistent with the result
+                                MedDetailView(medName: result, displayTitle: result)
+                            } label: {
+                                Text(result)
+                            }
+                        }
+                    }
+                } else if noResults {
+                    // Only show this when the API returns nil/empty for the user’s query
+                    List {
+                        Section {
+                            ContentUnavailableView(
+                                "No results found",
+                                systemImage: "magnifyingglass",
+                                description: Text("Try another name — brand or generic.")
+                            )
                         }
                     }
                 } else {
-                    // No validated result for the current text
-                    Section {
-                        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if trimmed.isEmpty || trimmed.count < 3 {
-                            ContentUnavailableView("Start typing to search",
-                                                  systemImage: "magnifyingglass",
-                                                  description: Text("Type at least 3 characters."))
-                        } else {
-                            ContentUnavailableView("No results for “\(trimmed)”",
-                                                  systemImage: "doc.text.magnifyingglass",
-                                                  description: Text("Try a different spelling or use a brand/generic name."))
-                        }
+                    // Initial / idle state (same clean feel as your old version)
+                    VStack(spacing: 12) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 44, weight: .regular))
+                            .foregroundStyle(.secondary)
+                        Text("Search for a medicine")
+                            .font(.title3.weight(.semibold))
+                        Text("Type a brand or generic name in the search field above.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
                     }
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.horizontal, 24)
+                    .background(Color(.systemBackground))
                 }
             }
-            .listStyle(.insetGrouped)
             .navigationTitle("Search")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Search") { Task { await runSearch(force: true) } }
-                        .disabled(query.trimmingCharacters(in: .whitespaces).count < 3)
-                }
+            // Native, clean “type to search” input
+            .searchable(text: $query,
+                        placement: .navigationBarDrawer(displayMode: .always),
+                        prompt: "Search medicines")
+            .onChange(of: query) { _, newValue in
+                scheduleDebouncedAPI(for: newValue)
+            }
+            .onSubmit(of: .search) {
+                Task { await runSearch(force: true) }
             }
         }
     }
@@ -95,23 +94,23 @@ struct SearchView: View {
         debounceTask?.cancel()
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
 
+        // Reset to idle if too short
         guard trimmed.count >= 3 else {
-            // Reset UI to idle when input is too short
             resetState()
             return
         }
 
-        // Avoid hammering API on the same string repeatedly
+        // Avoid re-querying the exact same text
         if trimmed.caseInsensitiveCompare(lastSearchedText) == .orderedSame { return }
 
         debounceTask = Task { [trimmed] in
-            try? await Task.sleep(nanoseconds: 450_000_000) // ~450ms
+            try? await Task.sleep(nanoseconds: 250_000_000) // ~250ms
             await runSearch(force: false, queryOverride: trimmed)
         }
     }
 
-    /// Calls the API once for the given query. If the API returns data, we show exactly one result row.
-    /// If it returns nil, we show "No results" (no fake clickable items).
+    /// Calls the API for the query. If the API returns *meaningful* data,
+    /// we show exactly one result row with the name to tap. If not, we show "No results found".
     private func runSearch(force: Bool, queryOverride: String? = nil) async {
         let q = (queryOverride ?? query).trimmingCharacters(in: .whitespacesAndNewlines)
         guard q.count >= 3 else { return }
@@ -123,27 +122,28 @@ struct SearchView: View {
             isSearching = true
             errorText = nil
             validatedResult = nil
+            noResults = false
         }
 
         do {
-            // We validate by actually fetching details from your service layer.
-            if let details = try await OpenFDAService.fetchDetails(forName: q) {
-                // Use API’s canonical title if it looks good; fallback to the query that worked.
+            if let details = try await OpenFDAService.fetchDetails(forName: q),
+               isMeaningful(details) {
                 let apiTitle = details.title.trimmingCharacters(in: .whitespacesAndNewlines)
                 let display = cleanTitle(apiTitle) ?? q
 
-                // Only apply if this is the latest outstanding request
                 guard token == latestToken else { return }
                 await MainActor.run {
                     self.validatedResult = display
+                    self.noResults = false
                     self.isSearching = false
                     self.lastSearchedText = q
                 }
             } else {
-                // Only apply if latest
+                // API returned nil / empty → explicit No results state
                 guard token == latestToken else { return }
                 await MainActor.run {
-                    self.validatedResult = nil   // -> No results section shows
+                    self.validatedResult = nil
+                    self.noResults = true
                     self.isSearching = false
                     self.lastSearchedText = q
                 }
@@ -154,6 +154,7 @@ struct SearchView: View {
                 self.errorText = "Search failed. Please try again."
                 self.isSearching = false
                 self.validatedResult = nil
+                self.noResults = false
             }
         }
     }
@@ -162,15 +163,36 @@ struct SearchView: View {
         isSearching = false
         errorText = nil
         validatedResult = nil
+        noResults = false
         lastSearchedText = ""
         latestToken = UUID()
+    }
+
+    /// Treat obviously empty/garbage responses as “no result”.
+    private func isMeaningful(_ d: MedDetails) -> Bool {
+        let titleOK: Bool = {
+            let t = d.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !t.isEmpty, t.count <= 120 else { return false }
+            // reject big ALL-CAPS headers and weird boilerplate
+            if t.range(of: #"^[A-Z ]{10,}$"#, options: .regularExpression) != nil { return false }
+            return true
+        }()
+
+        // Require at least one non-trivial section
+        let bodyOK =
+            d.combinedText.replacingOccurrences(of: "\\s", with: "", options: .regularExpression).count > 200
+            || !d.uses.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !d.dosage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !d.warnings.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !d.sideEffects.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+        return titleOK && bodyOK
     }
 
     /// Simple sanity filter for titles; returns nil for obviously bogus header strings.
     private func cleanTitle(_ t: String) -> String? {
         let trimmed = t.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.count <= 80 else { return nil }
-        // Approve titles that look like normal drug names (reject all-caps headers etc.)
         if trimmed.range(of: #"^[A-Z][A-Za-z0-9 ()\-/.,]+$"#, options: .regularExpression) == nil {
             return nil
         }

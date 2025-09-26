@@ -176,7 +176,8 @@ final class UserMedsRepo: ObservableObject {
 
 // MARK: - Meds tab (per-user via Firestore)
 struct MedListView: View {
-    @StateObject private var repo = UserMedsRepo()
+    // Use the shared repo injected by RootTabView
+    @EnvironmentObject private var repo: UserMedsRepo
 
     @State private var showingAdd = false
     @State private var isPresentingPhotoPicker = false
@@ -194,7 +195,6 @@ struct MedListView: View {
         return Image(uiImage: ui).renderingMode(.original)
     }
 
-    // Filter to only the meds you want visible on the Meds tab
     private var activeMeds: [LocalMed] {
         repo.meds
             .filter { $0.isActive() && !$0.isArchived }
@@ -281,7 +281,7 @@ struct MedListView: View {
                 }
             }
 
-            // Edit sheet (Firestore)
+            // Edit sheet
             .sheet(item: $editMed) { med in
                 NavigationStack {
                     EditLocalMedView(med: med) { updated in
@@ -297,7 +297,6 @@ struct MedListView: View {
             .sheet(isPresented: $showUploadReview) {
                 if let img = selectedImage {
                     UploadPhotoView(image: img) {
-                        // handle after review if needed
                     } onCancel: {
                         selectedImage = nil
                     }
@@ -320,7 +319,7 @@ struct MedListView: View {
                 }
             }
 
-            // FDA info sheet (from Meds list)
+            // FDA info sheet
             .sheet(item: $infoMed) { med in
                 NavigationStack {
                     MedDetailView(medName: med.name, displayTitle: med.name)
@@ -330,7 +329,7 @@ struct MedListView: View {
                 .presentationDetents([.medium, .large])
             }
 
-            // Add sheet (Firestore)
+            // Add sheet
             .sheet(isPresented: $showingAdd) {
                 AddLocalMedView { newMed in
                     Task { await repo.add(newMed) }
@@ -352,9 +351,8 @@ struct MedListView: View {
             } message: { med in
                 Text("“\(med.name)” and its scheduled doses will be removed.")
             }
-            .onAppear { repo.start() }
         }
-        .avoidsTabBar() // keep list above the TabView bar
+        .avoidsTabBar()
     }
 }
 

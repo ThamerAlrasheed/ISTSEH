@@ -56,6 +56,7 @@ struct SettingsView: View {
             .onChange(of: firstName) { _, _ in Task { await persistNames() } }
             .onChange(of: lastName)  { _, _ in Task { await persistNames() } }
         }
+        .safeAreaPadding(.bottom)
     }
 
     // MARK: - Sections

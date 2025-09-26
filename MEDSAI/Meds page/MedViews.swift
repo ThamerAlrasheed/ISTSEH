@@ -86,6 +86,21 @@ struct LocalMed: Identifiable, Hashable {
     }
 }
 
+// MARK: - Active/ended helpers (local to this file; no other files touched)
+extension LocalMed {
+    func isActive(on date: Date = Date()) -> Bool {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: date)
+        let start = cal.startOfDay(for: startDate)
+        let end   = cal.startOfDay(for: endDate)
+        return (today >= start) && (today <= end)
+    }
+    func hasEnded(on date: Date = Date()) -> Bool {
+        let cal = Calendar.current
+        return cal.startOfDay(for: date) > cal.startOfDay(for: endDate)
+    }
+}
+
 // MARK: - Repo (per-user, realtime)
 @MainActor
 final class UserMedsRepo: ObservableObject {
@@ -179,6 +194,13 @@ struct MedListView: View {
         return Image(uiImage: ui).renderingMode(.original)
     }
 
+    // Filter to only the meds you want visible on the Meds tab
+    private var activeMeds: [LocalMed] {
+        repo.meds
+            .filter { $0.isActive() && !$0.isArchived }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -195,12 +217,12 @@ struct MedListView: View {
                                            description: Text(err))
                 } else {
                     List {
-                        if repo.meds.isEmpty {
-                            Text("No medications yet. Tap + to add.")
+                        if activeMeds.isEmpty {
+                            Text("No active medications. Tap + to add.")
                                 .foregroundStyle(.secondary)
                         }
 
-                        ForEach(repo.meds, id: \.id) { med in
+                        ForEach(activeMeds, id: \.id) { med in
                             HStack(spacing: 12) {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(med.name).font(.headline)
@@ -214,6 +236,14 @@ struct MedListView: View {
                                     }
                                     Button { infoMed = med } label: {
                                         Label("Medicine information", systemImage: "info.circle")
+                                    }
+                                    if med.hasEnded() {
+                                        Divider()
+                                        Button {
+                                            Task { await repo.setArchived(med, archived: true) }
+                                        } label: {
+                                            Label("Move to History", systemImage: "archivebox")
+                                        }
                                     }
                                     Divider()
                                     Button(role: .destructive) { toDelete = med } label: {
@@ -324,6 +354,7 @@ struct MedListView: View {
             }
             .onAppear { repo.start() }
         }
+        .avoidsTabBar() // keep list above the TabView bar
     }
 }
 

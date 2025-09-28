@@ -5,7 +5,8 @@ struct RootTabView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject var medsRepo: UserMedsRepo
 
-    @State private var selection: Int = 1 // 0 Today, 1 Schedule, 2 Meds, 3 Settings
+    // 0 Today, 1 Schedule, 2 Meds, 3 Search, 4 Settings
+    @State private var selection: Int = 1
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -15,7 +16,8 @@ struct RootTabView: View {
                 TodayScheduleView().tag(0)
                 SchedulePageView().tag(1)
                 MedListView().tag(2)
-                SettingsView().tag(3)
+                SearchView().tag(3)     // 👈 New Search tab content
+                SettingsView().tag(4)
             }
             .toolbar(.hidden, for: .tabBar) // hide Apple's tab bar (iOS 16+)
             .onAppear {
@@ -47,7 +49,8 @@ private struct GlassTabBar: View {
         .init(id: 0, title: "Today",    systemImage: "calendar.badge.clock"),
         .init(id: 1, title: "Schedule", systemImage: "calendar"),
         .init(id: 2, title: "Meds",     systemImage: "pills.fill"),
-        .init(id: 3, title: "Settings", systemImage: "gearshape")
+        .init(id: 3, title: "Search",   systemImage: "magnifyingglass"), // 👈 New button
+        .init(id: 4, title: "Settings", systemImage: "gearshape")
     ]
 
     var body: some View {
@@ -84,7 +87,7 @@ private struct GlassTabButton: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 2) { // 👈 icon on top, text underneath
+            VStack(spacing: 2) { // icon on top, text underneath (prevents truncation)
                 Image(systemName: systemImage)
                     .font(.system(size: 18, weight: .semibold))
                 Text(title)

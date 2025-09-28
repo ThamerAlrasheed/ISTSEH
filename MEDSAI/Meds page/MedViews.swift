@@ -16,6 +16,7 @@ struct LocalMed: Identifiable, Hashable {
     var ingredients: [String]?
     var minIntervalHours: Int?
     var isArchived: Bool
+    var kbKey: String? // link to /medications/{key}
 
     init(
         id: String = UUID().uuidString,
@@ -28,7 +29,8 @@ struct LocalMed: Identifiable, Hashable {
         notes: String? = nil,
         ingredients: [String]? = nil,
         minIntervalHours: Int? = nil,
-        isArchived: Bool = false
+        isArchived: Bool = false,
+        kbKey: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -41,6 +43,7 @@ struct LocalMed: Identifiable, Hashable {
         self.ingredients = ingredients
         self.minIntervalHours = minIntervalHours
         self.isArchived = isArchived
+        self.kbKey = kbKey
     }
 
     // Firestore ←→ Local
@@ -65,6 +68,7 @@ struct LocalMed: Identifiable, Hashable {
         self.ingredients = data["ingredients"] as? [String]
         self.minIntervalHours = data["minIntervalHours"] as? Int
         self.isArchived = data["isArchived"] as? Bool ?? false
+        self.kbKey = data["kbKey"] as? String
     }
 
     var asFirestore: [String: Any] {
@@ -81,23 +85,9 @@ struct LocalMed: Identifiable, Hashable {
         if let n = notes, !n.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { out["notes"] = n }
         if let ings = ingredients, !ings.isEmpty { out["ingredients"] = ings }
         if let ih = minIntervalHours { out["minIntervalHours"] = ih }
+        if let kb = kbKey { out["kbKey"] = kb }
         if out["createdAt"] == nil { out["createdAt"] = FieldValue.serverTimestamp() }
         return out
-    }
-}
-
-// MARK: - Active/ended helpers (local to this file; no other files touched)
-extension LocalMed {
-    func isActive(on date: Date = Date()) -> Bool {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: date)
-        let start = cal.startOfDay(for: startDate)
-        let end   = cal.startOfDay(for: endDate)
-        return (today >= start) && (today <= end)
-    }
-    func hasEnded(on date: Date = Date()) -> Bool {
-        let cal = Calendar.current
-        return cal.startOfDay(for: date) > cal.startOfDay(for: endDate)
     }
 }
 
@@ -159,9 +149,7 @@ final class UserMedsRepo: ObservableObject {
             try await col(uid).document(med.id).setData(med.asFirestore, merge: true)
         } catch { errorMessage = error.localizedDescription }
     }
-    func update(_ med: LocalMed) async {
-        await add(med)
-    }
+    func update(_ med: LocalMed) async { await add(med) }
     func delete(_ med: LocalMed) async {
         do {
             let uid = try requireUID()
@@ -176,8 +164,7 @@ final class UserMedsRepo: ObservableObject {
 
 // MARK: - Meds tab (per-user via Firestore)
 struct MedListView: View {
-    // Use the shared repo injected by RootTabView
-    @EnvironmentObject private var repo: UserMedsRepo
+    @StateObject private var repo = UserMedsRepo()
 
     @State private var showingAdd = false
     @State private var isPresentingPhotoPicker = false
@@ -195,70 +182,35 @@ struct MedListView: View {
         return Image(uiImage: ui).renderingMode(.original)
     }
 
-    private var activeMeds: [LocalMed] {
-        repo.meds
-            .filter { $0.isActive() && !$0.isArchived }
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-    }
-
     var body: some View {
         NavigationStack {
             Group {
                 if !repo.isSignedIn {
                     ContentUnavailableView("Sign in required",
-                                           systemImage: "person.crop.circle.badge.exclamationmark",
-                                           description: Text("Please log in to view and manage your medications."))
+                        systemImage: "person.crop.circle.badge.exclamationmark",
+                        description: Text("Please log in to view and manage your medications."))
                 } else if repo.isLoading {
                     ProgressView("Loading medications…")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let err = repo.errorMessage {
                     ContentUnavailableView("Couldn’t load medications",
-                                           systemImage: "exclamationmark.triangle",
-                                           description: Text(err))
+                        systemImage: "exclamationmark.triangle",
+                        description: Text(err))
                 } else {
                     List {
-                        if activeMeds.isEmpty {
-                            Text("No active medications. Tap + to add.")
+                        if repo.meds.isEmpty {
+                            Text("No medications yet. Tap + to add.")
                                 .foregroundStyle(.secondary)
                         }
 
-                        ForEach(activeMeds, id: \.id) { med in
-                            HStack(spacing: 12) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(med.name).font(.headline)
-                                    Text("\(med.dosage) • \(med.frequencyPerDay)x/day • \(med.foodRule.label)")
-                                        .font(.subheadline).foregroundStyle(.secondary)
-                                }
-                                Spacer(minLength: 8)
-                                Menu {
-                                    Button { editMed = med } label: {
-                                        Label("Edit", systemImage: "pencil")
-                                    }
-                                    Button { infoMed = med } label: {
-                                        Label("Medicine information", systemImage: "info.circle")
-                                    }
-                                    if med.hasEnded() {
-                                        Divider()
-                                        Button {
-                                            Task { await repo.setArchived(med, archived: true) }
-                                        } label: {
-                                            Label("Move to History", systemImage: "archivebox")
-                                        }
-                                    }
-                                    Divider()
-                                    Button(role: .destructive) { toDelete = med } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                } label: {
-                                    Image(systemName: "ellipsis.circle")
-                                        .font(.title3)
-                                        .foregroundStyle(.secondary)
-                                        .padding(.horizontal, 4)
-                                        .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
+                        ForEach(repo.meds, id: \.id) { med in
+                            MedRow(med: med) {
+                                editMed = med
+                            } onInfo: {
+                                infoMed = med
+                            } onDelete: {
+                                toDelete = med
                             }
-                            .contentShape(Rectangle())
                         }
                     }
                     .listStyle(.insetGrouped)
@@ -274,7 +226,7 @@ struct MedListView: View {
                         Button { isPresentingPhotoPicker = true } label: {
                             HStack { Text("Upload Med Picture"); Spacer(minLength: 8); menuIcon("photo.on.rectangle") }
                         }
-                        Button { /* TODO: camera later */ } label: {
+                        Button { /* camera later */ } label: {
                             HStack { Text("Take a Picture of the Med"); Spacer(minLength: 8); menuIcon("camera") }
                         }
                     } label: { Image(systemName: "plus.circle.fill") }
@@ -297,6 +249,7 @@ struct MedListView: View {
             .sheet(isPresented: $showUploadReview) {
                 if let img = selectedImage {
                     UploadPhotoView(image: img) {
+                        // handle after review if needed
                     } onCancel: {
                         selectedImage = nil
                     }
@@ -319,10 +272,10 @@ struct MedListView: View {
                 }
             }
 
-            // FDA info sheet
+            // Info sheet
             .sheet(item: $infoMed) { med in
                 NavigationStack {
-                    MedDetailView(medName: med.name, displayTitle: med.name)
+                    MedDetailView(medName: med.name, kbKey: med.kbKey)
                         .navigationTitle("Details")
                         .navigationBarTitleDisplayMode(.inline)
                 }
@@ -351,12 +304,47 @@ struct MedListView: View {
             } message: { med in
                 Text("“\(med.name)” and its scheduled doses will be removed.")
             }
+            .onAppear { repo.start() }
         }
-        .avoidsTabBar()
     }
 }
 
-// MARK: - Add (Firestore)
+// MARK: - Row extracted to avoid complex type-checking
+private struct MedRow: View {
+    let med: LocalMed
+    let onEdit: () -> Void
+    let onInfo: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(med.name).font(.headline)
+                let subtitle = "\(med.dosage) • \(med.frequencyPerDay)x/day • \(med.foodRule.label)"
+                Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Menu {
+                Button(action: onEdit) { Label("Edit", systemImage: "pencil") }
+                Button(action: onInfo) { Label("More information", systemImage: "info.circle") }
+                Divider()
+                Button(role: .destructive, action: onDelete) {
+                    Label("Delete", systemImage: "trash")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+// MARK: - Add (GPT + catalog upsert)
 struct AddLocalMedView: View {
     var onSave: (LocalMed) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -370,15 +358,13 @@ struct AddLocalMedView: View {
     @State private var end = Calendar.current.date(byAdding: .day, value: 14, to: Date())!
     @State private var notes = ""
 
-    // FDA
-    @State private var isLoadingFDA = false
-    @State private var fdaChips: [String] = []
+    // GPT
+    @State private var isLoadingInfo = false
+    @State private var infoChips: [String] = []
     @State private var parsedFoodRule: FoodRule = .none
     @State private var parsedMinInterval: Int? = nil
-    @State private var parsedIngredients: [String] = []
 
-    // Strengths from FDA
-    @State private var isFDAIdentified: Bool = false
+    // Strengths from GPT
     @State private var dosageOptions: [String] = []
     @State private var selectedDosageOption: String? = nil
 
@@ -393,45 +379,23 @@ struct AddLocalMedView: View {
                     TextField("Name", text: $name)
                         .textInputAutocapitalization(.words)
                         .autocorrectionDisabled()
-                        .onChange(of: name) { _, new in scheduleFDALoad(for: new) }
+                        .onChange(of: name) { _, new in scheduleLookup(for: new) }
 
                     if !dosageOptions.isEmpty {
-                        Picker("Dose", selection: Binding(
-                            get: { selectedDosageOption ?? dosageOptions.first },
-                            set: { selectedDosageOption = $0 }
-                        )) {
-                            ForEach(dosageOptions, id: \.self) { opt in
-                                Text(opt).tag(Optional(opt))
-                            }
-                        }
+                        DosePicker(options: dosageOptions, selection: $selectedDosageOption)
                     } else {
-                        HStack {
-                            NumericTextField(value: $dosageAmount, placeholder: "Amount", allowsDecimal: true, maxFractionDigits: 2)
-                                .frame(minWidth: 90)
-                            Picker("Unit", selection: $dosageUnit) {
-                                ForEach(DosageUnit.allCases) { u in Text(u.label).tag(u) }
-                            }
-                            .pickerStyle(.menu)
-                            .labelsHidden()
-                        }
+                        DoseManual(amount: $dosageAmount, unit: $dosageUnit)
                     }
 
                     Stepper("\(freq)x per day", value: $freq, in: 1...6)
 
-                    if isLoadingFDA {
+                    if isLoadingInfo {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
-                            Text("Getting FDA info…").foregroundStyle(.secondary)
+                            Text("Getting drug info…").foregroundStyle(.secondary)
                         }
-                    } else {
-                        if !name.trimmingCharacters(in: .whitespaces).isEmpty {
-                            Text(isFDAIdentified ? "Verified by FDA" : "No FDA label found")
-                                .font(.footnote)
-                                .foregroundStyle(isFDAIdentified ? .green : .secondary)
-                        }
-                        if !fdaChips.isEmpty {
-                            WrapChips(items: fdaChips)
-                        }
+                    } else if !infoChips.isEmpty {
+                        WrapChips(items: infoChips)
                     }
                 }
 
@@ -469,7 +433,7 @@ struct AddLocalMedView: View {
             }
         }()
 
-        let med = LocalMed(
+        var med = LocalMed(
             name: name.trimmingCharacters(in: .whitespaces),
             dosage: dosageString,
             frequencyPerDay: freq,
@@ -477,65 +441,112 @@ struct AddLocalMedView: View {
             endDate: end,
             foodRule: parsedFoodRule,
             notes: notes.isEmpty ? nil : notes,
-            ingredients: parsedIngredients.isEmpty ? nil : parsedIngredients,
+            ingredients: nil,
             minIntervalHours: parsedMinInterval
         )
+
+        // Upsert catalog in background (best effort)
+        Task.detached {
+            do {
+                let payload = try await DrugInfo.fetchDetails(name: med.name)
+                let entry = try await MedCatalogRepo.shared.upsert(from: payload, searchedName: med.name, imageURL: nil)
+                med.kbKey = entry.key
+            } catch {
+                print("⚠️ Catalog upsert from Add failed:", error.localizedDescription)
+            }
+        }
+
         onSave(med)
         dismiss()
     }
 
-    // MARK: - FDA helpers
-    private func scheduleFDALoad(for input: String) {
+    // MARK: - GPT lookup helpers
+    private func scheduleLookup(for input: String) {
         fetchTask?.cancel()
         let trimmed = input.trimmingCharacters(in: .whitespaces)
         guard trimmed.count >= 3 else {
-            fdaChips = []; parsedFoodRule = .none; parsedMinInterval = nil; parsedIngredients = []
-            isFDAIdentified = false; dosageOptions = []; selectedDosageOption = nil
+            infoChips = []; parsedFoodRule = .none; parsedMinInterval = nil
+            dosageOptions = []; selectedDosageOption = nil
             return
         }
         if trimmed.caseInsensitiveCompare(lastFetchedName) == .orderedSame { return }
         fetchTask = Task { [trimmed] in
             try? await Task.sleep(nanoseconds: 600_000_000)
-            await loadFDA(for: trimmed)
+            await loadInfo(for: trimmed)
         }
     }
 
     @MainActor
-    private func loadFDA(for medName: String) async {
-        isLoadingFDA = true
-        defer { isLoadingFDA = false }
+    private func loadInfo(for medName: String) async {
+        isLoadingInfo = true
+        defer { isLoadingInfo = false }
         lastFetchedName = medName
-        isFDAIdentified = false; dosageOptions = []; selectedDosageOption = nil
+        dosageOptions = []; selectedDosageOption = nil
 
         do {
-            if let details = try await OpenFDAService.fetchDetails(forName: medName) {
-                isFDAIdentified = true
-                let parsed = DrugTextParser.parse(details.combinedText)
-                parsedFoodRule = parsed.foodRule ?? .none
-                parsedMinInterval = parsed.minIntervalHours
-                parsedIngredients = details.ingredients
-                if let ih = parsed.minIntervalHours {
-                    let suggested = DrugTextParser.frequencySuggestion(from: ih)
-                    if suggested != freq { freq = max(1, min(6, suggested)) }
-                }
-                var chips: [String] = []
-                if let fr = parsed.foodRule { chips.append(fr == .afterFood ? "Take after food" : "Take before food") }
-                if let ih = parsed.minIntervalHours { chips.append("~every \(ih)h") }
-                if !parsed.mustAvoid.isEmpty { chips.append("Avoid: " + parsed.mustAvoid.joined(separator: ", ")) }
-                fdaChips = chips
-            } else {
-                fdaChips = ["No FDA label found"]; parsedFoodRule = .none; parsedMinInterval = nil; parsedIngredients = []
-            }
+            let payload = try await DrugInfo.fetchDetails(name: medName)
+            // Strengths
+            dosageOptions = payload.strengths
+            selectedDosageOption = payload.strengths.first
 
-            let options = try await OpenFDAService.fetchDosageOptions(forName: medName)
-            if !options.isEmpty { dosageOptions = options; selectedDosageOption = options.first }
+            // Food rule + min interval
+            switch (payload.foodRule ?? "none").lowercased() {
+            case "afterfood", "after_food": parsedFoodRule = .afterFood
+            case "beforefood", "before_food": parsedFoodRule = .beforeFood
+            default: parsedFoodRule = .none
+            }
+            parsedMinInterval = payload.minIntervalHours
+
+            // Chips
+            var chips: [String] = []
+            if parsedFoodRule == .afterFood { chips.append("Take after food") }
+            if parsedFoodRule == .beforeFood { chips.append("Take before food") }
+            if let ih = parsedMinInterval { chips.append("~every \(ih)h") }
+            infoChips = chips
+
+            // Pre-cache in catalog
+            Task.detached { _ = try? await MedCatalogRepo.shared.upsert(from: payload, searchedName: medName, imageURL: nil) }
         } catch {
-            fdaChips = ["Couldn’t fetch FDA info"]; isFDAIdentified = false; dosageOptions = []; selectedDosageOption = nil
+            infoChips = ["Couldn’t fetch info"]
         }
     }
 }
 
-// MARK: - Edit (Firestore)
+// Subviews used by AddLocalMedView — keeps type-checking simple
+private struct DosePicker: View {
+    let options: [String]
+    @Binding var selection: String?
+
+    var body: some View {
+        let sel = Binding<String>(
+            get: { selection ?? options.first ?? "" },
+            set: { selection = $0 }
+        )
+        return Picker("Dose", selection: sel) {
+            ForEach(options, id: \.self) { opt in
+                Text(opt).tag(opt)
+            }
+        }
+    }
+}
+
+private struct DoseManual: View {
+    @Binding var amount: Double?
+    @Binding var unit: DosageUnit
+    var body: some View {
+        HStack {
+            NumericTextField(value: $amount, placeholder: "Amount", allowsDecimal: true, maxFractionDigits: 2)
+                .frame(minWidth: 90)
+            Picker("Unit", selection: $unit) {
+                ForEach(DosageUnit.allCases) { u in Text(u.label).tag(u) }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+        }
+    }
+}
+
+// MARK: - Edit (minimal changes)
 struct EditLocalMedView: View {
     var med: LocalMed
     var onSave: (LocalMed) -> Void
@@ -545,10 +556,7 @@ struct EditLocalMedView: View {
     @State private var doseAmount: Double? = nil
     @State private var doseUnit: DosageUnit = .mg
 
-    @State private var isLoadingFDA = false
-    @State private var fdaChips: [String] = []
-    @State private var fetchTask: Task<Void, Never>? = nil
-    @State private var lastFetchedName = ""
+    @State private var infoChips: [String] = []
 
     init(med: LocalMed, onSave: @escaping (LocalMed) -> Void) {
         self.med = med
@@ -562,25 +570,12 @@ struct EditLocalMedView: View {
                 TextField("Name", text: $working.name)
                     .textInputAutocapitalization(.words)
                     .autocorrectionDisabled()
-                    .onChange(of: working.name) { _, new in scheduleFDALoad(for: new) }
 
-                HStack {
-                    NumericTextField(value: $doseAmount, placeholder: "Amount", allowsDecimal: true, maxFractionDigits: 2)
-                        .frame(minWidth: 90)
-                    Picker("Unit", selection: $doseUnit) {
-                        ForEach(DosageUnit.allCases) { u in Text(u.label).tag(u) }
-                    }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
-                }
+                DoseManual(amount: $doseAmount, unit: $doseUnit)
 
                 Stepper("\(working.frequencyPerDay)x per day", value: $working.frequencyPerDay, in: 1...6)
 
-                if isLoadingFDA {
-                    HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Getting FDA info…").foregroundStyle(.secondary) }
-                } else if !fdaChips.isEmpty {
-                    WrapChips(items: fdaChips)
-                }
+                if !infoChips.isEmpty { WrapChips(items: infoChips) }
             }
 
             Section("Dates") {
@@ -598,14 +593,12 @@ struct EditLocalMedView: View {
         }
         .onAppear {
             let (amt, unit) = parseDosageToDouble(working.dosage)
-            doseAmount = amt
-            doseUnit = unit
-
+            doseAmount = amt; doseUnit = unit
             var chips: [String] = []
             if working.foodRule == .afterFood { chips.append("Take after food") }
             if working.foodRule == .beforeFood { chips.append("Take before food") }
             if let ih = working.minIntervalHours { chips.append("~every \(ih)h") }
-            fdaChips = chips
+            infoChips = chips
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -618,130 +611,45 @@ struct EditLocalMedView: View {
             }
         }
     }
-
-    // FDA
-    private func scheduleFDALoad(for input: String) {
-        fetchTask?.cancel()
-        let trimmed = input.trimmingCharacters(in: .whitespaces)
-        guard trimmed.count >= 3 else { return }
-        if trimmed.caseInsensitiveCompare(lastFetchedName) == .orderedSame { return }
-        fetchTask = Task { [trimmed] in
-            try? await Task.sleep(nanoseconds: 600_000_000)
-            await loadFDA(for: trimmed)
-        }
-    }
-
-    @MainActor
-    private func loadFDA(for medName: String) async {
-        isLoadingFDA = true
-        defer { isLoadingFDA = false }
-        lastFetchedName = medName
-
-        do {
-            if let details = try await OpenFDAService.fetchDetails(forName: medName) {
-                let parsed = DrugTextParser.parse(details.combinedText)
-                working.foodRule = parsed.foodRule ?? .none
-                working.minIntervalHours = parsed.minIntervalHours
-                working.ingredients = details.ingredients
-                if let ih = parsed.minIntervalHours {
-                    let suggested = DrugTextParser.frequencySuggestion(from: ih)
-                    working.frequencyPerDay = max(1, min(6, suggested))
-                }
-                var chips: [String] = []
-                if working.foodRule == .afterFood { chips.append("Take after food") }
-                if working.foodRule == .beforeFood { chips.append("Take before food") }
-                if let ih = working.minIntervalHours { chips.append("~every \(ih)h") }
-                fdaChips = chips
-            } else {
-                fdaChips = ["No FDA label found"]
-            }
-        } catch {
-            fdaChips = ["Couldn’t fetch FDA info"]
-        }
-    }
 }
 
-// MARK: - Upload photo review (unchanged)
-struct UploadPhotoView: View {
-    let image: UIImage
-    var onDone: (() -> Void)? = nil
-    var onCancel: (() -> Void)? = nil
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 16) {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxHeight: 320)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .padding(.horizontal)
-                Spacer()
-            }
-            .navigationTitle("Review Photo")
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Cancel") { onCancel?(); dismiss() } }
-                ToolbarItem(placement: .topBarTrailing) { Button("Done") { onDone?(); dismiss() } }
-            }
-        }
-    }
-}
-
-// MARK: - FDA info view
+// MARK: - Details — try catalog first, else GPT then cache
 struct MedDetailView: View {
-    /// Name used for API lookups (can be normalized)
     let medName: String
-    /// Name to show to the user (exact label they clicked/added)
-    let displayTitle: String?
-
-    /// Prefer the API title if it looks clean.
-    private let preferApiTitle = true
-
-    // Backwards-compat constructor
-    init(medName: String, displayTitle: String? = nil) {
-        self.medName = medName
-        self.displayTitle = displayTitle
-    }
+    var kbKey: String?
 
     @State private var loading = true
-    @State private var details: MedDetails?
-    @State private var essentials: MedEssentials?
+    @State private var payload: DrugPayload?
     @State private var errorText: String?
-    @State private var headerTitle: String = ""
+
+    var headerTitle: String { payload?.title.isEmpty == false ? payload!.title : medName }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if loading {
                     ProgressView("Loading info…")
-                } else if let e = essentials {
-                    Text(headerTitle)
-                        .font(.largeTitle).bold()
-                        .padding(.bottom, 4)
+                } else if let p = payload {
+                    Text(headerTitle).font(.largeTitle).bold().padding(.bottom, 4)
 
-                    if !e.quickTips.isEmpty { WrapChips(items: e.quickTips) }
-                    if !e.whatFor.isEmpty { InfoSection(title: "What it’s for", bullets: e.whatFor) }
-                    if !e.howToTake.isEmpty { InfoSection(title: "How to take", bullets: e.howToTake) }
-                    if !e.interactionsToAvoid.isEmpty { InfoSection(title: "Don’t mix with", bullets: e.interactionsToAvoid) }
-                    if !e.commonSideEffects.isEmpty { InfoSection(title: "Common side effects", bullets: e.commonSideEffects) }
-                    if !e.importantWarnings.isEmpty {
-                        DisclosureGroup {
-                            InfoSection(title: "Details", bullets: e.importantWarnings)
-                        } label: { Text("Important warnings").font(.headline) }
-                        .padding(.top, 8)
+                    if !p.strengths.isEmpty { WrapChips(items: p.strengths) }
+
+                    if p.foodRule != nil || p.minIntervalHours != nil {
+                        InfoSection(title: "Rules", bullets: [
+                            p.foodRule.map { "Food: \($0)" },
+                            p.minIntervalHours.map { "Minimum interval: \($0)h" }
+                        ].compactMap { $0 })
                     }
-                    if !e.ingredients.isEmpty {
-                        Text("Ingredients: " + e.ingredients.joined(separator: ", "))
-                            .font(.footnote).foregroundStyle(.secondary).padding(.top, 8)
-                    }
-                    Text("Source: FDA drug labels. This is educational information — not medical advice.")
+
+                    if !p.howToTake.isEmpty { InfoSection(title: "How to take", bullets: p.howToTake) }
+                    if !p.indications.isEmpty { InfoSection(title: "What it’s for", bullets: p.indications) }
+                    if !p.interactionsToAvoid.isEmpty { InfoSection(title: "Don’t mix with", bullets: p.interactionsToAvoid) }
+                    if !p.commonSideEffects.isEmpty { InfoSection(title: "Common side effects", bullets: p.commonSideEffects) }
+
+                    Text("Source: AI-extracted drug information. Educational only — not medical advice.")
                         .font(.footnote).foregroundStyle(.secondary).padding(.top, 8)
-                } else {
-                    // No data from API → clear, friendly empty state (no blank page)
-                    ContentUnavailableView("No FDA information found",
-                                           systemImage: "doc.text.magnifyingglass",
-                                           description: Text("We couldn’t find a drug label for “\(headerTitle)”. Try another spelling or a generic/brand name."))
+                } else if let e = errorText {
+                    ContentUnavailableView("No information", systemImage: "doc.text.magnifyingglass", description: Text(e))
                         .padding(.top, 16)
                 }
             }
@@ -749,61 +657,47 @@ struct MedDetailView: View {
         }
         .navigationTitle(headerTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            // Start with what the user tapped
-            self.headerTitle = (displayTitle?.isEmpty == false ? displayTitle! : medName)
-        }
         .task { await load() }
+    }
+
+    private func normalizeKey(_ raw: String) -> String {
+        raw.lowercased()
+            .replacingOccurrences(of: #"[^a-z0-9]+"#, with: "_", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+    }
+
+    private func loadFromCatalog(nameOrKey: String) async -> DrugPayload? {
+        let key = normalizeKey(nameOrKey)
+        let col = Firestore.firestore().collection("medications")
+        do {
+            let snap = try await col.document(key).getDocument()
+            guard let data = snap.data(), let payloadMap = data["payload"] as? [String: Any] else { return nil }
+            let json = try JSONSerialization.data(withJSONObject: payloadMap)
+            let p = try JSONDecoder().decode(DrugPayload.self, from: json)
+            return p
+        } catch { return nil }
     }
 
     private func load() async {
         loading = true; defer { loading = false }
+
+        // 1) Try catalog by kbKey, then by medName
+        if let k = kbKey, let p = await loadFromCatalog(nameOrKey: k) {
+            self.payload = p; return
+        }
+        if let p = await loadFromCatalog(nameOrKey: medName) {
+            self.payload = p; return
+        }
+
+        // 2) Fallback to GPT call, then cache
         do {
-            if let d = try await OpenFDAService.fetchDetails(forName: medName),
-               isMeaningful(d) {
-                self.details = d
-                self.essentials = MedSummarizer.essentials(from: d)
-
-                if preferApiTitle, let clean = cleanTitle(d.title) {
-                    self.headerTitle = clean
-                }
-            } else {
-                // keep headerTitle as user-visible label; show empty-state UI
-                self.details = nil
-                self.essentials = nil
-            }
+            let p = try await DrugInfo.fetchDetails(name: medName)
+            self.payload = p
+            Task.detached { _ = try? await MedCatalogRepo.shared.upsert(from: p, searchedName: medName, imageURL: nil) }
         } catch {
-            self.details = nil
-            self.essentials = nil
-            self.errorText = "Couldn’t fetch data."
+            self.payload = nil
+            self.errorText = "We couldn’t find details for “\(medName)”."
         }
-    }
-
-    private func isMeaningful(_ d: MedDetails) -> Bool {
-        let titleOK: Bool = {
-            let t = d.title.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !t.isEmpty, t.count <= 120 else { return false }
-            if t.range(of: #"^[A-Z ]{10,}$"#, options: .regularExpression) != nil { return false }
-            return true
-        }()
-
-        let bodyOK =
-            d.combinedText.replacingOccurrences(of: "\\s", with: "", options: .regularExpression).count > 200
-            || !d.uses.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !d.dosage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !d.warnings.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !d.sideEffects.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-
-        return titleOK && bodyOK
-    }
-
-    private func cleanTitle(_ t: String) -> String? {
-        let trimmed = t.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed.count <= 80 else { return nil }
-        if trimmed.range(of: #"^[A-Z][A-Za-z0-9 ()\-/.,]+$"#, options: .regularExpression) == nil {
-            return nil
-        }
-        return trimmed
     }
 }
 
@@ -847,12 +741,8 @@ private struct FlexibleWrap<Content: View>: View {
     @State private var totalHeight = CGFloat.zero
 
     var body: some View {
-        VStack {
-            GeometryReader { geo in
-                self.generateContent(in: geo)
-            }
-        }
-        .frame(height: totalHeight)
+        VStack { GeometryReader { geo in self.generateContent(in: geo) } }
+            .frame(height: totalHeight)
     }
 
     private func generateContent(in g: GeometryProxy) -> some View {
@@ -881,6 +771,33 @@ private struct FlexibleWrap<Content: View>: View {
         GeometryReader { geo -> Color in
             DispatchQueue.main.async { binding.wrappedValue = geo.size.height }
             return .clear
+        }
+    }
+}
+
+// MARK: - Upload review (restored)
+struct UploadPhotoView: View {
+    let image: UIImage
+    var onDone: (() -> Void)? = nil
+    var onCancel: (() -> Void)? = nil
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 16) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxHeight: 320)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .padding(.horizontal)
+                Spacer()
+            }
+            .navigationTitle("Review Photo")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) { Button("Cancel") { onCancel?(); dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) { Button("Done") { onDone?(); dismiss() } }
+            }
         }
     }
 }

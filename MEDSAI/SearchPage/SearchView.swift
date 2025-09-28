@@ -2,200 +2,201 @@ import SwiftUI
 
 struct SearchView: View {
     @State private var query: String = ""
-    @State private var isSearching: Bool = false
-    @State private var errorText: String? = nil
+    @State private var isLoading = false
+    @State private var errorText: String?
+    @State private var result: DrugPayload?
 
-    // A single validated display name to show as a clickable result
-    @State private var validatedResult: String? = nil
-
-    // Explicit "no results" state after a completed lookup
-    @State private var noResults: Bool = false
-
-    // Debounce + stale-response protection
-    @State private var debounceTask: Task<Void, Never>? = nil
-    @State private var latestToken: UUID = UUID()
-    @State private var lastSearchedText: String = ""
+    @State private var fetchTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
-            Group {
-                if isSearching {
-                    List {
-                        Section { HStack { ProgressView(); Text("Searching…") } }
-                    }
-                } else if let err = errorText {
-                    List {
-                        Section {
-                            ContentUnavailableView(
-                                "Couldn't search",
-                                systemImage: "exclamationmark.triangle",
-                                description: Text(err)
-                            )
+            VStack(spacing: 12) {
+                HStack {
+                    TextField("Search medication (e.g., Augmentin, Panadol…)", text: $query)
+                        .textInputAutocapitalization(.words)
+                        .autocorrectionDisabled()
+                        .padding(12)
+                        .background(Color(.secondarySystemBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .onChange(of: query) { _, new in
+                            scheduleLookup(for: new)
                         }
+
+                    if isLoading {
+                        ProgressView().frame(width: 20, height: 20)
                     }
-                } else if let result = validatedResult {
-                    // We have a meaningful API-backed result: show one clean, clickable row
-                    List {
-                        Section(header: Text("Results")) {
-                            NavigationLink {
-                                // Keep the displayTitle consistent with the result
-                                MedDetailView(medName: result, displayTitle: result)
-                            } label: {
-                                Text(result)
+                }
+                .padding(.horizontal)
+
+                if query.trimmingCharacters(in: .whitespaces).isEmpty {
+                    // Initial empty state
+                    VStack(spacing: 12) {
+                        Image(systemName: "pills.fill")
+                            .font(.system(size: 42))
+                            .foregroundStyle(.secondary)
+                        Text("Search for a medicine to see details")
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxHeight: .infinity)
+                } else if let err = errorText {
+                    Text(err)
+                        .foregroundStyle(.red)
+                        .font(.footnote)
+                        .padding(.horizontal)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            if let r = result {
+                                Text(r.title.isEmpty ? query : r.title)
+                                    .font(.title2).bold()
+                                    .padding(.horizontal)
+
+                                if !r.strengths.isEmpty {
+                                    SectionHeader("Strengths")
+                                    WrapChips(items: r.strengths)
+                                }
+
+                                if r.foodRule != nil || r.minIntervalHours != nil {
+                                    SectionHeader("Rules")
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        if let fr = r.foodRule { Text("Food: \(fr)") }
+                                        if let ih = r.minIntervalHours { Text("Min interval: \(ih)h") }
+                                    }
+                                    .padding(.horizontal)
+                                }
+
+                                if !r.howToTake.isEmpty {
+                                    SectionHeader("How to take")
+                                    BulletList(r.howToTake)
+                                }
+
+                                if !r.indications.isEmpty {
+                                    SectionHeader("What it’s for")
+                                    BulletList(r.indications)
+                                }
+
+                                if !r.interactionsToAvoid.isEmpty {
+                                    SectionHeader("Don’t mix with")
+                                    BulletList(r.interactionsToAvoid)
+                                }
+
+                                if !r.commonSideEffects.isEmpty {
+                                    SectionHeader("Common side effects")
+                                    BulletList(r.commonSideEffects)
+                                }
+                            } else if !isLoading {
+                                ContentUnavailableView(
+                                    "No results",
+                                    systemImage: "magnifyingglass",
+                                    description: Text("Try a different spelling or a brand/generic name.")
+                                )
+                                .padding(.top, 24)
                             }
                         }
+                        .padding(.bottom, 20)
                     }
-                } else if noResults {
-                    // Only show this when the API returns nil/empty for the user’s query
-                    List {
-                        Section {
-                            ContentUnavailableView(
-                                "No results found",
-                                systemImage: "magnifyingglass",
-                                description: Text("Try another name — brand or generic.")
-                            )
-                        }
-                    }
-                } else {
-                    // Initial / idle state (same clean feel as your old version)
-                    VStack(spacing: 12) {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 44, weight: .regular))
-                            .foregroundStyle(.secondary)
-                        Text("Search for a medicine")
-                            .font(.title3.weight(.semibold))
-                        Text("Type a brand or generic name in the search field above.")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.horizontal, 24)
-                    .background(Color(.systemBackground))
                 }
             }
             .navigationTitle("Search")
-            // Native, clean “type to search” input
-            .searchable(text: $query,
-                        placement: .navigationBarDrawer(displayMode: .always),
-                        prompt: "Search medicines")
-            .onChange(of: query) { _, newValue in
-                scheduleDebouncedAPI(for: newValue)
-            }
-            .onSubmit(of: .search) {
-                Task { await runSearch(force: true) }
-            }
         }
     }
 
-    // MARK: - Debounce & API
-
-    private func scheduleDebouncedAPI(for text: String) {
-        debounceTask?.cancel()
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        // Reset to idle if too short
+    private func scheduleLookup(for input: String) {
+        fetchTask?.cancel()
+        let trimmed = input.trimmingCharacters(in: .whitespaces)
         guard trimmed.count >= 3 else {
-            resetState()
+            result = nil; errorText = nil; isLoading = false
             return
         }
-
-        // Avoid re-querying the exact same text
-        if trimmed.caseInsensitiveCompare(lastSearchedText) == .orderedSame { return }
-
-        debounceTask = Task { [trimmed] in
-            try? await Task.sleep(nanoseconds: 250_000_000) // ~250ms
-            await runSearch(force: false, queryOverride: trimmed)
+        fetchTask = Task { [trimmed] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            await lookup(trimmed)
         }
     }
 
-    /// Calls the API for the query. If the API returns *meaningful* data,
-    /// we show exactly one result row with the name to tap. If not, we show "No results found".
-    private func runSearch(force: Bool, queryOverride: String? = nil) async {
-        let q = (queryOverride ?? query).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard q.count >= 3 else { return }
-        if !force, q.caseInsensitiveCompare(lastSearchedText) == .orderedSame { return }
-
-        let token = UUID()
-        latestToken = token
-        await MainActor.run {
-            isSearching = true
-            errorText = nil
-            validatedResult = nil
-            noResults = false
-        }
-
+    @MainActor
+    private func lookup(_ term: String) async {
+        isLoading = true
+        errorText = nil
+        defer { isLoading = false }
         do {
-            if let details = try await OpenFDAService.fetchDetails(forName: q),
-               isMeaningful(details) {
-                let apiTitle = details.title.trimmingCharacters(in: .whitespacesAndNewlines)
-                let display = cleanTitle(apiTitle) ?? q
+            let payload = try await DrugInfo.fetchDetails(name: term)
+            result = payload
 
-                guard token == latestToken else { return }
-                await MainActor.run {
-                    self.validatedResult = display
-                    self.noResults = false
-                    self.isSearching = false
-                    self.lastSearchedText = q
-                }
-            } else {
-                // API returned nil / empty → explicit No results state
-                guard token == latestToken else { return }
-                await MainActor.run {
-                    self.validatedResult = nil
-                    self.noResults = true
-                    self.isSearching = false
-                    self.lastSearchedText = q
+            // 👇 Save to global catalog
+            Task.detached {
+                do {
+                    _ = try await MedCatalogRepo.shared.upsert(from: payload, searchedName: term, imageURL: nil)
+                } catch {
+                    print("⚠️ MedCatalog upsert failed:", error.localizedDescription)
                 }
             }
         } catch {
-            guard token == latestToken else { return }
-            await MainActor.run {
-                self.errorText = "Search failed. Please try again."
-                self.isSearching = false
-                self.validatedResult = nil
-                self.noResults = false
+            errorText = "Couldn’t fetch drug info. \(error.localizedDescription)"
+            result = nil
+        }
+    }
+}
+
+// MARK: - Helpers (same as before)
+
+private struct SectionHeader: View {
+    let title: String
+    init(_ title: String) { self.title = title }
+    var body: some View { Text(title).font(.headline).padding(.horizontal) }
+}
+
+private struct BulletList: View {
+    let items: [String]
+    init(_ items: [String]) { self.items = items }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(items.prefix(12), id: \.self) { t in
+                HStack(alignment: .top, spacing: 8) { Text("•").bold(); Text(t) }
             }
         }
+        .padding(.horizontal)
     }
+}
 
-    private func resetState() {
-        isSearching = false
-        errorText = nil
-        validatedResult = nil
-        noResults = false
-        lastSearchedText = ""
-        latestToken = UUID()
-    }
-
-    /// Treat obviously empty/garbage responses as “no result”.
-    private func isMeaningful(_ d: MedDetails) -> Bool {
-        let titleOK: Bool = {
-            let t = d.title.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !t.isEmpty, t.count <= 120 else { return false }
-            // reject big ALL-CAPS headers and weird boilerplate
-            if t.range(of: #"^[A-Z ]{10,}$"#, options: .regularExpression) != nil { return false }
-            return true
-        }()
-
-        // Require at least one non-trivial section
-        let bodyOK =
-            d.combinedText.replacingOccurrences(of: "\\s", with: "", options: .regularExpression).count > 200
-            || !d.uses.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !d.dosage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !d.warnings.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !d.sideEffects.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-
-        return titleOK && bodyOK
-    }
-
-    /// Simple sanity filter for titles; returns nil for obviously bogus header strings.
-    private func cleanTitle(_ t: String) -> String? {
-        let trimmed = t.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed.count <= 80 else { return nil }
-        if trimmed.range(of: #"^[A-Z][A-Za-z0-9 ()\-/.,]+$"#, options: .regularExpression) == nil {
-            return nil
+private struct WrapChips: View {
+    let items: [String]
+    var body: some View {
+        FlexibleWrap(items: items) { text in
+            Text(text)
+                .font(.footnote)
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(Color(.secondarySystemBackground))
+                .clipShape(Capsule())
         }
-        return trimmed
+        .padding(.horizontal)
+    }
+}
+
+private struct FlexibleWrap<Content: View>: View {
+    let items: [String]; let content: (String) -> Content
+    @State private var totalHeight = CGFloat.zero
+    var body: some View {
+        VStack { GeometryReader { geo in self.generateContent(in: geo) } }
+            .frame(height: totalHeight)
+    }
+    private func generateContent(in g: GeometryProxy) -> some View {
+        var width = CGFloat.zero; var height = CGFloat.zero
+        return ZStack(alignment: .topLeading) {
+            ForEach(items, id: \.self) { item in
+                content(item)
+                    .alignmentGuide(.leading) { d in
+                        if (abs(width - d.width) > g.size.width) { width = 0; height -= d.height }
+                        let res = width; if item == items.last! { width = 0 } else { width -= d.width }; return res
+                    }
+                    .alignmentGuide(.top) { _ in let res = height; if item == items.last! { height = 0 }; return res }
+            }
+        }.background(viewHeightReader($totalHeight))
+    }
+    private func viewHeightReader(_ binding: Binding<CGFloat>) -> some View {
+        GeometryReader { geo -> Color in
+            DispatchQueue.main.async { binding.wrappedValue = geo.size.height }; return .clear
+        }
     }
 }

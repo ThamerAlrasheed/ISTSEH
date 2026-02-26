@@ -141,6 +141,13 @@ struct SettingsView: View {
 
     private var appearanceSection: some View {
         Section(header: Text("Appearance")) {
+            Picker("Theme", selection: $settings.appearanceMode) {
+                ForEach(AppSettings.AppearanceMode.allCases) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
             Picker("Font size", selection: Binding(
                 get: { fontSize },
                 set: { newValue in fontSizeRaw = newValue.rawValue }
@@ -154,7 +161,6 @@ struct SettingsView: View {
             Picker("Language", selection: $languageCode) {
                 Text("English").tag("en")
                 Text("العربية").tag("ar")
-                // Add more when you localize
             }
         }
     }

@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Combine
 import FirebaseAuth
 import FirebaseFirestore
@@ -22,6 +23,24 @@ final class AppSettings: ObservableObject {
     @Published var onboardingCompleted: Bool
     @Published var didChooseEntry: Bool
 
+    // Appearance
+    enum AppearanceMode: String, CaseIterable, Identifiable {
+        case light, dark, system
+        var id: String { rawValue }
+        var label: String { rawValue.capitalized }
+    }
+    @Published var appearanceMode: AppearanceMode
+
+    /// Returns the ColorScheme to pass to `.preferredColorScheme()`.
+    /// `nil` means follow the system setting.
+    var colorScheme: ColorScheme? {
+        switch appearanceMode {
+        case .light:  return .light
+        case .dark:   return .dark
+        case .system: return nil
+        }
+    }
+
     // Internal
     private var cancellables = Set<AnyCancellable>()
     private var isApplyingRemote = false
@@ -44,6 +63,10 @@ final class AppSettings: ObservableObject {
         onboardingCompleted = false
         didChooseEntry = false
 
+        // Appearance default (light)
+        let savedMode = UserDefaults.standard.string(forKey: "appearanceMode") ?? AppearanceMode.light.rawValue
+        appearanceMode = AppearanceMode(rawValue: savedMode) ?? .light
+
         // Debounced auto-save when routine changes locally
         saveDebounce
             .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
@@ -63,6 +86,12 @@ final class AppSettings: ObservableObject {
             self.saveDebounce.send(())
         }
         .store(in: &cancellables)
+
+        // Persist appearance mode
+        $appearanceMode
+            .dropFirst() // skip initial value
+            .sink { UserDefaults.standard.set($0.rawValue, forKey: "appearanceMode") }
+            .store(in: &cancellables)
     }
 
     func resetAppFlow() {

@@ -1,97 +1,37 @@
 import SwiftUI
 
-/// Calendar page with "fade-after-appointments" behavior:
-/// - Calendar header stays fully visible while you scroll through Appointments.
-/// - As soon as you reach Doses, the calendar slowly fades out.
-/// - Scrolling back up reveals it again.
-/// - App logic unchanged (appointments above doses unless no doses; centered Add button; 3-dot menu).
+/// Calendar page – calendar picker at the top, then Appointments, then Doses.
 struct SchedulePageView: View {
     @EnvironmentObject var settings: AppSettings
 
-    // Medications (same repo used by Today)
     @StateObject private var repo = UserMedsRepo()
-
-    // Appointments Firestore repo
     @StateObject private var appts = AppointmentsRepo()
 
-    // Selected calendar day
     @State private var selectedDate: Date = Date()
-
-    // Read-only list of (time, LocalMed) pairs for the day
     @State private var dayDoses: [(Date, LocalMed)] = []
 
-    // Sheets
     @State private var showAddAppointment = false
-    @State private var editingAppointment: Appointment? = nil // presented via .sheet(item:)
-
-    // Header measuring
-    @State private var headerHeight: CGFloat = 240
-    @State private var measuredHeaderOnce = false
-
-    // Scrolling + fade control
-    @State private var scrollOffset: CGFloat = 0          // top content scroll
-    @State private var appointmentsHeight: CGFloat = 0    // measured total height of appointments block
-    @State private var fadeProgress: CGFloat = 0          // 0..1 (0 visible, 1 fully faded)
-
-    // Tunables
-    private let fadeDistance: CGFloat = 220               // how many points from end-of-appointments until fully faded
-    private let fadeAnimation = Animation.easeInOut(duration: 0.35)
+    @State private var editingAppointment: Appointment? = nil
 
     var body: some View {
         NavigationStack {
-            ZStack(alignment: .top) {
+            ScrollView {
+                VStack(spacing: 20) {
+                    // Calendar picker — inline at top
+                    CalendarView(selection: $selectedDate, initialMode: .monthly)
+                        .padding(.bottom, 4)
 
-                // SCROLL CONTENT
-                ScrollView(.vertical, showsIndicators: true) {
-                    LazyVStack(alignment: .leading, spacing: 0) {
+                    Divider().padding(.horizontal)
 
-                        // Offset tracker at the very top of the scroll content
-                        GeometryReader { proxy in
-                            let y = -proxy.frame(in: .named("ScheduleScroll")).minY
-                            Color.clear.preference(key: ScrollOffsetKey.self, value: y)
-                        }
-                        .frame(height: 0)
+                    // Appointments
+                    appointmentsBlock
 
-                        // ----- PAGE CONTENT -----
-                        VStack(spacing: 24) {
-
-                            // Appointments block (always shown)
-                            appointmentsBlock
-                                .background(
-                                    GeometryReader { proxy in
-                                        Color.clear
-                                            .preference(key: AppointmentsHeightKey.self,
-                                                        value: proxy.size.height)
-                                    }
-                                )
-
-                            // Doses block (always shown; handles empty state internally)
-                            dosesBlock
-                        }
-                        .padding(.bottom, 24)
-                        // Reserve space at the top for the overlay header so content starts below it
-                        .padding(.top, headerHeight)
-                    }
+                    // Doses
+                    dosesBlock
                 }
-                .coordinateSpace(name: "ScheduleScroll")
-                .onPreferenceChange(ScrollOffsetKey.self) { value in
-                    // Update general scroll position
-                    withAnimation(fadeAnimation) { scrollOffset = value }
-                    updateFadeProgress()
-                }
-                .onPreferenceChange(AppointmentsHeightKey.self) { h in
-                    appointmentsHeight = h
-                    updateFadeProgress()
-                }
-
-                // OVERLAYING CALENDAR HEADER (fades after appointments)
-                FadingHeader(
-                    selectedDate: $selectedDate,
-                    headerHeight: $headerHeight,
-                    measuredOnce: $measuredHeaderOnce,
-                    fadeProgress: fadeProgress
-                )
+                .padding(.bottom, 100)
             }
+            .background(Color(.systemGroupedBackground).ignoresSafeArea())
             .navigationTitle("Calendar")
             .onAppear {
                 repo.start()
@@ -105,30 +45,13 @@ struct SchedulePageView: View {
             .onChange(of: settings.dinner)    { _, _ in recomputeDoses() }
             .onChange(of: settings.bedtime)   { _, _ in recomputeDoses() }
             .onChange(of: settings.wakeup)    { _, _ in recomputeDoses() }
-            // Add sheet
             .sheet(isPresented: $showAddAppointment) {
                 AddAppointmentView(repo: appts, defaultDate: selectedDate, existing: nil)
             }
-            // Edit sheet (uses Appointment as Identifiable)
             .sheet(item: $editingAppointment) { appt in
                 AddAppointmentView(repo: appts, defaultDate: selectedDate, existing: appt)
             }
         }
-    }
-
-    // Compute fade progress: start fading once we've scrolled past the entire Appointments block.
-    private func updateFadeProgress() {
-        // If there are no doses, never fade the header.
-        guard !dayDoses.isEmpty else {
-            withAnimation(fadeAnimation) { fadeProgress = 0 }
-            return
-        }
-
-        // Start fading when scrollOffset exceeds appointmentsHeight (i.e., when Doses reach the top area).
-        let start = appointmentsHeight
-        let delta = max(0, scrollOffset - start)          // how far past the end of appointments
-        let p = min(1, delta / max(1, fadeDistance))      // normalize over fadeDistance
-        withAnimation(fadeAnimation) { fadeProgress = p }
     }
 
     // MARK: - Appointments block (above doses)
@@ -323,9 +246,6 @@ struct SchedulePageView: View {
             return (t, local)
         }
         dayDoses = display.sorted { $0.0 < $1.0 }
-
-        // Re-evaluate fade immediately when dose set flips between empty/non-empty
-        updateFadeProgress()
     }
 
     // MARK: - Formatting helpers
@@ -350,46 +270,6 @@ struct SchedulePageView: View {
 
     private func rowPadding<V: View>(_ v: V) -> some View {
         v.padding(.horizontal, 16).padding(.vertical, 12)
-    }
-}
-
-// MARK: - Fading Header (calendar)
-private struct FadingHeader: View {
-    @Binding var selectedDate: Date
-    @Binding var headerHeight: CGFloat
-    @Binding var measuredOnce: Bool
-
-    /// 0 = fully visible, 1 = fully faded
-    let fadeProgress: CGFloat
-
-    var body: some View {
-        VStack(spacing: 0) {
-            CalendarView(selection: $selectedDate, initialMode: .monthly)
-                .background(
-                    GeometryReader { proxy in
-                        Color.clear
-                            .onAppear {
-                                headerHeight = proxy.size.height
-                                measuredOnce = true
-                            }
-                            .onChange(of: proxy.size.height) { _, newValue in
-                                headerHeight = newValue
-                            }
-                    }
-                )
-                .padding(.bottom, 8)
-                .background(Color(.systemBackground))
-
-            Divider()
-        }
-        .frame(height: headerHeight, alignment: .top)
-        .opacity(1 - fadeProgress)
-        .offset(y: -fadeProgress * 10) // tiny lift while fading (feel)
-        .animation(.easeInOut(duration: 0.35), value: fadeProgress)
-        .background(.ultraThinMaterial)
-        .shadow(color: .black.opacity((1 - fadeProgress) > 0.02 ? 0.06 : 0), radius: 6, y: 4)
-        .accessibilityHidden(fadeProgress >= 1)
-        .opacity(measuredOnce ? (1 - fadeProgress) : 0) // avoid flash pre-measure
     }
 }
 
@@ -441,15 +321,4 @@ private struct CenteredPillButton: View {
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 1)
     }
-}
-
-// MARK: - Preference keys
-private struct ScrollOffsetKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
-
-private struct AppointmentsHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }

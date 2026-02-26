@@ -19,9 +19,9 @@ struct MediScheduleApp: App {
                 .environmentObject(settings)
                 .environmentObject(medsRepo)          // ✅ inject once so @EnvironmentObject works everywhere
 
-                // Global styling (unchanged)
+                // Global styling
                 .tint(Color(.systemGreen))
-                .preferredColorScheme(.light)
+                .preferredColorScheme(settings.colorScheme)
 
                 // Optional: configure notifications if you use them
                 .onAppear {

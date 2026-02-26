@@ -61,7 +61,10 @@ private struct GlassTabBar: View {
                     title: item.title,
                     systemImage: item.systemImage
                 ) {
-                    selection = item.id
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        selection = item.id
+                    }
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 }
                 .frame(maxWidth: .infinity) // equal width per tab
             }
@@ -89,9 +92,9 @@ private struct GlassTabButton: View {
         Button(action: action) {
             VStack(spacing: 2) { // icon on top, text underneath (prevents truncation)
                 Image(systemName: systemImage)
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 20, weight: .semibold))
                 Text(title)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .lineLimit(1)
                     .minimumScaleFactor(0.85) // prefer slight shrink over ellipses
                     .allowsTightening(true)

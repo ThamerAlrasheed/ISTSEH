@@ -8,36 +8,45 @@ struct LandingPageView: View {
 
                 VStack {
                     // Logo + Name at the top
-                    VStack(spacing: 8) {
+                    VStack(spacing: 12) {
                         Image(systemName: "pills.fill")
                             .resizable()
                             .scaledToFit()
-                            .frame(width: 96, height: 96)
+                            .frame(width: 110, height: 110)
                             .foregroundStyle(.green)
                         Text("ISTSEH")
-                            .font(.largeTitle).bold()
+                            .font(.system(size: 40, weight: .bold, design: .rounded))
+                        Text("Your personal medication assistant")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
                     }
-                    .padding(.top, 60)
+                    .padding(.top, 80)
 
                     Spacer()
 
                     // Buttons block centered
-                    VStack(spacing: 16) {
+                    VStack(spacing: 20) {
                         NavigationLink(destination: SignUpPageView()) {
                             Text("Sign Up")
+                                .font(.headline)
                                 .frame(maxWidth: .infinity)
+                                .frame(height: 54)
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
+                        .tint(.green)
 
                         NavigationLink(destination: LoginPageView()) {
                             Text("Log In")
+                                .font(.headline)
                                 .frame(maxWidth: .infinity)
+                                .frame(height: 54)
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.large)
                     }
-                    .frame(maxWidth: 320)
+                    .frame(maxWidth: 340)
 
                     Spacer() // balances above & below to center the buttons
                 }

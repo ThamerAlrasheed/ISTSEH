@@ -39,17 +39,17 @@ struct LoginPageView: View {
     private var isValid: Bool { emailOK && passwordOK }
     
     var body: some View {
-        VStack(spacing: 28) {
-            VStack(spacing: 8) {
+        VStack(spacing: 32) {
+            VStack(spacing: 12) {
                 Image(systemName: "pills.fill")
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 96, height: 96)
+                    .frame(width: 100, height: 100)
                     .foregroundStyle(.green)
                 Text("ISTSEH Login")
-                    .font(.largeTitle).bold()
+                    .font(.system(size: 32, weight: .bold, design: .rounded))
             }
-            .padding(.top, 32)
+            .padding(.top, 40)
             
             // Card
             VStack(spacing: 12) {
@@ -114,6 +114,7 @@ struct LoginPageView: View {
                 Task { await sendReset() }
             } label: {
                 Text("Forgot password?")
+                    .font(.body)
                     .underline()
                     .foregroundStyle(.green)
             }
@@ -126,7 +127,7 @@ struct LoginPageView: View {
                     .underline()
                     .foregroundStyle(.green)
             }
-            .font(.subheadline)
+            .font(.body)
             
             Spacer()
         }

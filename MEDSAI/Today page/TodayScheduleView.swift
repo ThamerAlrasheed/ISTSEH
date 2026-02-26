@@ -28,12 +28,12 @@ struct TodayScheduleView: View {
         NavigationStack {
             List {
                 // MARK: Appointments section
-                Section(header: Text(sectionTitle("Appointments"))) {
+                Section(header: Text(sectionTitle())) {
                     appointmentsSection
                 }
 
                 // MARK: Doses section
-                Section(header: Text(sectionTitle("Doses"))) {
+                Section {
                     dosesSection
                 }
 
@@ -329,11 +329,11 @@ struct TodayScheduleView: View {
         return parts.isEmpty ? "" : parts.joined(separator: " • ")
     }
 
-    private func sectionTitle(_ base: String) -> String {
+    private func sectionTitle() -> String {
         let df = DateFormatter()
         df.dateStyle = .full
         df.timeStyle = .none
-        return "\(base) – \(df.string(from: today))"
+        return df.string(from: today)
     }
 
     private func foodRuleLabel(_ rule: FoodRule) -> String {
@@ -393,15 +393,10 @@ private struct TodayRow: View {
 
             Spacer()
 
-            HStack(spacing: 6) {
-                Text(timeText)
-                    .font(.headline)
-                    .monospacedDigit()
-                    .foregroundStyle(isDone ? .secondary : .primary)
-                Image(systemName: "chevron.right")
-                    .font(.footnote)
-                    .foregroundStyle(.tertiary)
-            }
+            Text(timeText)
+                .font(.headline)
+                .monospacedDigit()
+                .foregroundStyle(isDone ? .secondary : .primary)
         }
         .padding(.vertical, 6)
         .contentShape(Rectangle())

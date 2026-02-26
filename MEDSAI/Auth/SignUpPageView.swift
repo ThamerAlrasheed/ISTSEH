@@ -1,409 +1,323 @@
 import SwiftUI
-import FirebaseCore
 import FirebaseAuth
 import FirebaseFirestore
 
-// MARK: - Validators
-fileprivate func isValidEmail(_ email: String) -> Bool {
-    let e = email.trimmingCharacters(in: .whitespacesAndNewlines)
-    let pattern = #"^[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"#
-    return e.range(of: pattern, options: .regularExpression) != nil
-}
-
-/// >= 8 chars, at least one upper, one lower, one digit
-fileprivate func isStrongPassword(_ s: String) -> Bool {
-    guard s.count >= 8 else { return false }
-    let upper = s.range(of: #".*[A-Z].*"#, options: .regularExpression) != nil
-    let lower = s.range(of: #".*[a-z].*"#, options: .regularExpression) != nil
-    let digit = s.range(of: #".*\d.*"#, options: .regularExpression) != nil
-    return upper && lower && digit
-}
-
-/// 2-step sign up with validation.
-/// Step 1: email/password. Step 2: profile + optional routine → saved to Firestore.
 struct SignUpPageView: View {
-    @EnvironmentObject var settings: AppSettings
+    // Flow steps
+    enum Step: Int { case account = 0, identity = 1, health = 2 }
 
-    // MARK: - Step Control
-    @State private var step = 1
+    @Environment(\.dismiss) private var dismiss
+    @State private var step: Step = .account
 
-    // MARK: - Step 1 (Auth)
+    // Step 1 — account (validate & check only; DO NOT create user here)
     @State private var email = ""
     @State private var password = ""
     @State private var confirmPassword = ""
-    @FocusState private var focusedAuth: AuthField?
+    @FocusState private var focusAccount: AccountField?
+    enum AccountField { case email, password, confirm }
 
-    // MARK: - Step 2 (Profile + Routine)
+    // Step 2 — identity
     @State private var firstName = ""
     @State private var lastName = ""
-    @State private var dob = Calendar.current.date(byAdding: .year, value: -18, to: Date()) ?? Date()
-    @FocusState private var focusedProfile: ProfileField?
+    @State private var phoneNumber = ""
+    @FocusState private var focusIdentity: IdentityField?
+    enum IdentityField { case first, last, phone }
 
-    // Optional routine
-    @State private var setRoutineNow = false
-    @State private var breakfast = DateComponents(hour: 8,  minute: 0)
-    @State private var lunch     = DateComponents(hour: 13, minute: 0)
-    @State private var dinner    = DateComponents(hour: 19, minute: 0)
-    @State private var bedtime   = DateComponents(hour: 23, minute: 0)
-    @State private var wakeup    = DateComponents(hour: 7,  minute: 0)
+    // Step 3 — health
+    @State private var dateOfBirth: Date = Calendar.current.date(byAdding: .year, value: -20, to: Date()) ?? Date()
+    @State private var allergies = ""
+    @State private var chronicDiseases = ""
 
-    // MARK: - UX
-    @State private var isLoading = false
-    @State private var alertTitle = ""
-    @State private var alertMessage = ""
-    @State private var showAlert = false
+    // UX
+    @State private var busy = false
+    @State private var errorText: String?
 
-    enum AuthField { case email, password, confirm }
-    enum ProfileField { case first, last }
-
-    private var emailValid: Bool { isValidEmail(email) }
-    private var passwordStrongEnough: Bool { isStrongPassword(password) }
+    // MARK: - Validators
+    private var emailValid: Bool {
+        let e = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pattern = #"^[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"#
+        return e.range(of: pattern, options: .regularExpression) != nil
+    }
+    /// >= 8 chars, at least one upper, one lower, one digit
+    private var strongPassword: Bool {
+        guard password.count >= 8 else { return false }
+        let up = password.range(of: #".*[A-Z].*"#, options: .regularExpression) != nil
+        let lo = password.range(of: #".*[a-z].*"#, options: .regularExpression) != nil
+        let di = password.range(of: #".*\d.*"#,   options: .regularExpression) != nil
+        return up && lo && di
+    }
     private var passwordsMatch: Bool { confirmPassword.isEmpty || password == confirmPassword }
-    private var authValid: Bool { emailValid && passwordStrongEnough && password == confirmPassword }
 
-    private var profileValid: Bool {
+    private var canNextFromAccount: Bool { emailValid && strongPassword && password == confirmPassword }
+    private var canNextFromIdentity: Bool {
         !firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         !lastName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // phone optional; add validation if needed
     }
+    private var canFinish: Bool { allergies.count <= 100 && chronicDiseases.count <= 100 }
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                LinearGradient(
-                    gradient: Gradient(colors: [Color(.systemBackground), Color(.secondarySystemBackground)]),
-                    startPoint: .top, endPoint: .bottom
-                )
-                .ignoresSafeArea()
-
+        ZStack {
                 ScrollView {
-                    VStack(spacing: 24) {
+                    VStack(spacing: 20) {
+                        // Header (big, like your screenshot)
                         header
 
-                        if step == 1 {
-                            authCard
-                            continueButton
-                            alreadyHaveAccountLink
-                        } else {
-                            profileCard
-                            routineOptionalCard
-                            createAccountButton
-                            backToStepOneButton
+                        // Step progress
+                        ProgressView(value: Double(step.rawValue + 1), total: 3)
+                            .tint(Color(.systemGreen))
+                            .padding(.bottom, 4)
+
+                        // Step content
+                        Group {
+                            switch step {
+                            case .account: accountCard
+                            case .identity: identityCard
+                            case .health: healthCard
+                            }
+                        }
+                        .animation(.easeInOut, value: step)
+
+                        // Error banner
+                        if let err = errorText {
+                            Text(err)
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
                         }
 
-                        Spacer(minLength: 16)
+                        // Controls
+                        controls
+                        Spacer(minLength: 10)
                     }
-                    .padding(.top, 24)
+                    .padding(.top, 20)
                 }
 
-                if isLoading {
-                    Color.black.opacity(0.15).ignoresSafeArea()
-                    ProgressView("Creating your account…")
+                if busy {
+                    Color.black.opacity(0.12).ignoresSafeArea()
+                    ProgressView(step == .health ? "Creating account…" : "Checking…")
                         .padding()
                         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
                 }
             }
+        // Toolbar: bold "ISTSEH" centered
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text("ISTSEH").font(.headline.bold())
+            }
         }
-        .navigationBarBackButtonHidden(true)
-        .alert(alertTitle, isPresented: $showAlert) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(alertMessage)
-        }
-        .onAppear {
-            // Seed routine defaults from local settings
-            breakfast = settings.breakfast
-            lunch     = settings.lunch
-            dinner    = settings.dinner
-            bedtime   = settings.bedtime
-            wakeup    = settings.wakeup
-        }
+        .navigationBarTitleDisplayMode(.inline)
+        // live cap to 100 chars
+        .onChange(of: allergies) { if $1.count > 100 { allergies = String($1.prefix(100)) } }
+        .onChange(of: chronicDiseases) { if $1.count > 100 { chronicDiseases = String($1.prefix(100)) } }
     }
 
     // MARK: - Header
     private var header: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 12) {
             Image(systemName: "pills.fill")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 96, height: 96)
+                .resizable().scaledToFit()
+                .frame(width: 90, height: 90)
                 .foregroundStyle(.green)
-            Text(step == 1 ? "Create your account" : "A few more details")
-                .font(.largeTitle).bold()
+            Text(step == .account ? "Create your account" :
+                 step == .identity ? "Tell us about you" :
+                 "Health details")
+            .font(.system(size: 28, weight: .bold, design: .rounded))
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal)
         }
     }
 
     // MARK: - Step 1 UI
-    private var authCard: some View {
+    private var accountCard: some View {
         VStack(spacing: 10) {
-            InputRow(
-                systemImage: "envelope",
-                placeholder: "Email",
-                text: $email,
-                isSecure: false,
-                isFocused: focusedAuth == .email
-            )
-            .focused($focusedAuth, equals: .email)
-            .textContentType(.emailAddress)
-            .keyboardType(.emailAddress)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
+            InputRow(systemImage: "envelope", placeholder: "Email", text: $email, isSecure: false, isFocused: focusAccount == .email)
+                .focused($focusAccount, equals: .email)
+                .textContentType(.emailAddress)
+                .keyboardType(.emailAddress)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            if !email.isEmpty && !emailValid { InlineError("Please enter a valid email.") }
 
-            if !email.isEmpty && !emailValid {
-                InlineError("Please enter a valid email address.")
-            }
-
-            InputRow(
-                systemImage: "lock",
-                placeholder: "Password (≥8, upper, lower, number)",
-                text: $password,
-                isSecure: true,
-                isFocused: focusedAuth == .password
-            )
-            .focused($focusedAuth, equals: .password)
-            .textContentType(.newPassword)
-
-            if !password.isEmpty && !passwordStrongEnough {
+            InputRow(systemImage: "lock", placeholder: "Password (≥8, upper, lower, number)", text: $password, isSecure: true, isFocused: focusAccount == .password)
+                .focused($focusAccount, equals: .password)
+                .textContentType(.newPassword)
+            if !password.isEmpty && !strongPassword {
                 InlineError("Password must be at least 8 characters and include upper, lower, and a number.")
             }
 
-            InputRow(
-                systemImage: "lock.rotation",
-                placeholder: "Confirm password",
-                text: $confirmPassword,
-                isSecure: true,
-                isFocused: focusedAuth == .confirm
-            )
-            .focused($focusedAuth, equals: .confirm)
-            .textContentType(.newPassword)
-
-            if !confirmPassword.isEmpty && !passwordsMatch {
-                InlineError("Passwords don't match.")
-            }
+            InputRow(systemImage: "lock.rotation", placeholder: "Confirm password", text: $confirmPassword, isSecure: true, isFocused: focusAccount == .confirm)
+                .focused($focusAccount, equals: .confirm)
+            if !confirmPassword.isEmpty && !passwordsMatch { InlineError("Passwords don't match.") }
         }
-        .padding(18)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-        )
-        .padding(.horizontal)
-    }
-
-    private var continueButton: some View {
-        Button {
-            withAnimation { step = 2 }
-        } label: {
-            Text("Continue")
-                .font(.headline)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 16)
-                .background(authValid ? Color.green : Color.green.opacity(0.5))
-                .foregroundColor(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .shadow(radius: 8, y: 6)
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal)
-        .disabled(!authValid)
-    }
-
-    private var alreadyHaveAccountLink: some View {
-        NavigationLink(destination: LoginPageView()) {
-            Text("Already have an account? Log in")
-                .underline()
-                .foregroundStyle(.green)
-        }
-        .font(.subheadline)
+        .cardStyle()
     }
 
     // MARK: - Step 2 UI
-    private var profileCard: some View {
-        VStack(spacing: 16) {
-            InputRow(
-                systemImage: "person",
-                placeholder: "First name",
-                text: $firstName,
-                isSecure: false,
-                isFocused: focusedProfile == .first
-            )
-            .focused($focusedProfile, equals: .first)
-            .textContentType(.givenName)
+    private var identityCard: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 10) {
+                InputRow(systemImage: "person", placeholder: "First name", text: $firstName, isSecure: false, isFocused: focusIdentity == .first)
+                    .focused($focusIdentity, equals: .first)
+                    .textContentType(.givenName)
+                InputRow(systemImage: "person.fill", placeholder: "Last name", text: $lastName, isSecure: false, isFocused: focusIdentity == .last)
+                    .focused($focusIdentity, equals: .last)
+                    .textContentType(.familyName)
+            }
+            InputRow(systemImage: "phone", placeholder: "Phone number (optional)", text: $phoneNumber, isSecure: false, isFocused: focusIdentity == .phone)
+                .focused($focusIdentity, equals: .phone)
+                .textContentType(.telephoneNumber)
+                .keyboardType(.phonePad)
+        }
+        .cardStyle()
+    }
 
-            InputRow(
-                systemImage: "person.fill",
-                placeholder: "Last name",
-                text: $lastName,
-                isSecure: false,
-                isFocused: focusedProfile == .last
-            )
-            .focused($focusedProfile, equals: .last)
-            .textContentType(.familyName)
-
-            // DOB with explicit label
+    // MARK: - Step 3 UI
+    private var healthCard: some View {
+        VStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Date of birth")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                Text("Date of birth").font(.subheadline).foregroundStyle(.secondary)
                 HStack(spacing: 12) {
-                    Image(systemName: "calendar")
-                        .imageScale(.medium)
-                        .foregroundStyle(.secondary)
-                    DatePicker(
-                        "Date of birth",
-                        selection: $dob,
-                        in: ...Date(),
-                        displayedComponents: .date
-                    )
-                    .labelsHidden()
+                    Image(systemName: "calendar").imageScale(.medium).foregroundStyle(.secondary)
+                    DatePicker("Date of birth", selection: $dateOfBirth, in: ...Date(), displayedComponents: .date)
+                        .labelsHidden()
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color(.secondarySystemBackground))
-                )
-            }
-        }
-        .padding(18)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-        )
-        .padding(.horizontal)
-    }
-
-    private var routineOptionalCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Toggle(isOn: $setRoutineNow.animation()) {
-                Text("Set meal & sleep times now (optional)")
+                .fieldContainer()
             }
 
-            if setRoutineNow {
-                VStack(alignment: .leading, spacing: 14) {
-                    RoutineRow(title: "Breakfast", comps: $breakfast)
-                    RoutineRow(title: "Lunch",     comps: $lunch)
-                    RoutineRow(title: "Dinner",    comps: $dinner)
-                    Divider().padding(.vertical, 4)
-                    RoutineRow(title: "Bedtime",   comps: $bedtime)
-                    RoutineRow(title: "Wake up",   comps: $wakeup)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Allergies (max 100)").font(.subheadline).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(allergies.count)/100").font(.caption).foregroundStyle(.secondary)
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                TextField("e.g. Penicillin, Peanuts", text: $allergies, axis: .vertical)
+                    .lineLimit(2...4)
+                    .multilineTextAlignment(.leading)
+                    .padding(12)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Chronic conditions (max 100)").font(.subheadline).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(chronicDiseases.count)/100").font(.caption).foregroundStyle(.secondary)
+                }
+                TextField("e.g. Diabetes, Hypertension", text: $chronicDiseases, axis: .vertical)
+                    .lineLimit(2...4)
+                    .multilineTextAlignment(.leading)
+                    .padding(12)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
             }
         }
-        .padding(18)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-        )
-        .padding(.horizontal)
+        .cardStyle()
     }
 
-    private var createAccountButton: some View {
-        Button(action: completeSignUp) {
-            HStack {
-                if isLoading { ProgressView().controlSize(.small) }
-                Text("Create account")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
+    // MARK: - Controls
+    private var controls: some View {
+        HStack {
+            if step != .account {
+                Button("Back") {
+                    withAnimation { step = Step(rawValue: step.rawValue - 1) ?? .account }
+                }
+                .buttonStyle(.bordered)
             }
-            .padding(.vertical, 16)
-            .background(profileValid ? Color.green : Color.green.opacity(0.5))
-            .foregroundColor(.white)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .shadow(radius: 8, y: 6)
+            Spacer()
+            if step == .health {
+                Button(busy ? "Saving…" : "Create account") { Task { await finish() } }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color(.systemGreen))
+                    .disabled(busy || !canFinish)
+            } else {
+                Button(busy ? "Checking…" : "Next") { Task { await next() } }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color(.systemGreen))
+                    .disabled(busy ||
+                              (step == .account && !canNextFromAccount) ||
+                              (step == .identity && !canNextFromIdentity))
+            }
         }
-        .buttonStyle(.plain)
         .padding(.horizontal)
-        .disabled(!profileValid || isLoading)
+        .padding(.bottom, 8)
     }
 
-    private var backToStepOneButton: some View {
-        Button {
-            withAnimation { step = 1 }
-        } label: {
-            Label("Back", systemImage: "chevron.left")
+    // MARK: - Flow logic
+
+    private func next() async {
+        errorText = nil
+        switch step {
+        case .account:
+            await checkEmailThenProceed()
+        case .identity:
+            withAnimation { step = .health }
+        case .health:
+            break
         }
-        .foregroundStyle(.secondary)
-        .padding(.top, 2)
     }
 
-    // MARK: - Actions
-    private func completeSignUp() {
-        guard authValid, profileValid, !isLoading else { return }
-        isLoading = true
+    /// Step 1: only validate & check availability; do NOT create auth user here.
+    private func checkEmailThenProceed() async {
+        guard canNextFromAccount else { return }
+        busy = true
+        defer { busy = false }
 
-        // Ensure Firebase configured (defensive)
-        if FirebaseApp.app() == nil { FirebaseApp.configure() }
-
-        let emailTrimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        Auth.auth().createUser(withEmail: emailTrimmed, password: password) { result, error in
-            if let error = error {
-                isLoading = false
-                presentError("Sign up failed", error.localizedDescription)
+        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            let methods = try await Auth.auth().fetchSignInMethods(forEmail: trimmed)
+            if !methods.isEmpty {
+                errorText = "This email is already registered. Try logging in or use a different email."
                 return
             }
-            guard let uid = result?.user.uid else {
-                isLoading = false
-                presentError("Sign up failed", "Could not get user ID.")
-                return
-            }
+            withAnimation { step = .identity }
+        } catch {
+            errorText = error.localizedDescription
+        }
+    }
 
-            // Compose the profile document with embedded medications array
-            let doc: [String: Any] = [
-                "email": emailTrimmed, // <-- add email to Firestore user doc
+    /// Final step: create Firebase Auth user, then write profile to Firestore.
+    private func finish() async {
+        guard canFinish else { return }
+        busy = true
+        defer { busy = false }
+
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        do {
+            // 1) Create Auth user now
+            let result = try await Auth.auth().createUser(withEmail: trimmedEmail, password: password)
+            let uid = result.user.uid
+
+            // 2) Save profile document
+            let profile: [String: Any] = [
+                "email": trimmedEmail,
                 "firstName": firstName.trimmingCharacters(in: .whitespacesAndNewlines),
                 "lastName":  lastName.trimmingCharacters(in: .whitespacesAndNewlines),
-                "dateOfBirth": Timestamp(date: dob),
-                "routine": [
-                    "breakfast": ["hour": breakfast.hour ?? 8, "minute": breakfast.minute ?? 0],
-                    "lunch":     ["hour": lunch.hour ?? 13,     "minute": lunch.minute ?? 0],
-                    "dinner":    ["hour": dinner.hour ?? 19,    "minute": dinner.minute ?? 0],
-                    "bedtime":   ["hour": bedtime.hour ?? 23,   "minute": bedtime.minute ?? 0],
-                    "wakeup":    ["hour": wakeup.hour ?? 7,     "minute": wakeup.minute ?? 0],
-                ],
-                "medications": [], // Initialize empty medications array
+                "phoneNumber": phoneNumber.trimmingCharacters(in: .whitespacesAndNewlines),
+                "dateOfBirth": Timestamp(date: dateOfBirth),
+                "allergies": String(allergies.prefix(100)).trimmingCharacters(in: .whitespacesAndNewlines),
+                "chronicDiseases": String(chronicDiseases.prefix(100)).trimmingCharacters(in: .whitespacesAndNewlines),
                 "createdAt": FieldValue.serverTimestamp(),
                 "updatedAt": FieldValue.serverTimestamp()
             ]
 
-            let db = Firestore.firestore()
-            db.collection("users").document(uid).setData(doc, merge: true) { err in
-                isLoading = false
-                if let err = err {
-                    presentError("Couldn't save profile", err.localizedDescription)
-                    return
-                }
+            try await Firestore.firestore()
+                .collection("users")
+                .document(uid)
+                .setData(profile, merge: true)
 
-                // Mirror to local settings for immediate UI usage
-                settings.firstName = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
-                settings.lastName  = lastName.trimmingCharacters(in: .whitespacesAndNewlines)
-                settings.dateOfBirth = dob
-                if setRoutineNow {
-                    settings.breakfast = breakfast
-                    settings.lunch     = lunch
-                    settings.dinner    = dinner
-                    settings.bedtime   = bedtime
-                    settings.wakeup    = wakeup
-                }
-
-                // Into the app
-                settings.didChooseEntry = true
-                settings.onboardingCompleted = true
-            }
+            // 3) Done
+            dismiss()
+        } catch {
+            errorText = "Couldn’t create account: \(error.localizedDescription)"
         }
-    }
-
-    private func presentError(_ title: String, _ message: String) {
-        alertTitle = title
-        alertMessage = message
-        showAlert = true
     }
 }
 
-// MARK: - Small reusable views
+// MARK: - Reusable UI bits
+
 private struct InputRow: View {
     let systemImage: String
     let placeholder: String
@@ -416,7 +330,6 @@ private struct InputRow: View {
             Image(systemName: systemImage)
                 .imageScale(.medium)
                 .foregroundStyle(.secondary)
-
             if isSecure {
                 SecureField(placeholder, text: $text)
             } else {
@@ -425,27 +338,16 @@ private struct InputRow: View {
                     .autocorrectionDisabled()
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(isFocused ? Color.green : Color.primary.opacity(0.08),
-                              lineWidth: isFocused ? 1.5 : 1)
-        )
+        .fieldContainer(highlighted: isFocused)
     }
 }
 
 private struct InlineError: View {
     let message: String
-    init(_ message: String) { self.message = message }
+    init(_ m: String) { message = m }
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .imageScale(.small)
+            Image(systemName: "exclamationmark.triangle.fill").imageScale(.small)
             Text(message)
         }
         .font(.footnote)
@@ -455,42 +357,29 @@ private struct InlineError: View {
     }
 }
 
-/// Time picker row for meal/sleep times, using DateComponents.
-private struct RoutineRow: View {
-    let title: String
-    @Binding var comps: DateComponents
-
-    var body: some View {
-        HStack {
-            Text(title)
-                .frame(width: 100, alignment: .leading)
-
-            DatePicker(
-                "",
-                selection: Binding<Date>(
-                    get: { Calendar.current.date(from: comps) ?? defaultDate(for: title) },
-                    set: { newDate in
-                        let parts = Calendar.current.dateComponents([.hour, .minute], from: newDate)
-                        comps.hour = parts.hour
-                        comps.minute = parts.minute
-                    }
-                ),
-                displayedComponents: .hourAndMinute
+private extension View {
+    func cardStyle() -> some View {
+        self
+            .padding(18)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
             )
-            .labelsHidden()
-        }
-        .font(.title3)
+            .padding(.horizontal)
     }
-
-    private func defaultDate(for title: String) -> Date {
-        let cal = Calendar.current
-        switch title {
-        case "Breakfast": return cal.date(from: .init(hour: 8,  minute: 0)) ?? Date()
-        case "Lunch":     return cal.date(from: .init(hour: 13, minute: 0)) ?? Date()
-        case "Dinner":    return cal.date(from: .init(hour: 19, minute: 0)) ?? Date()
-        case "Bedtime":   return cal.date(from: .init(hour: 23, minute: 0)) ?? Date()
-        case "Wake up":   return cal.date(from: .init(hour: 7,  minute: 0)) ?? Date()
-        default:          return Date()
-        }
+    func fieldContainer(highlighted: Bool = false) -> some View {
+        self
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color(.secondarySystemBackground))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(highlighted ? Color.green : Color.primary.opacity(0.08),
+                                  lineWidth: highlighted ? 1.5 : 1)
+            )
     }
 }

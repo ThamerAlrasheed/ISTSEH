@@ -72,15 +72,18 @@ export const drugIntel = onRequest(
       });
 
       const raw = chat.choices?.[0]?.message?.content ?? "";
-      const data = safeParseJSON<DrugIntel>(raw);
+      const data = safeParseJSON<Partial<DrugIntel>>(raw);
 
+      // Always return the exact shape the app expects (no missing keys)
       const clean: DrugIntel = {
-        title: (data.title || name).toString(),
+        title: (data.title != null && String(data.title).trim() !== "") ? String(data.title).trim() : name,
         strengths: Array.isArray(data.strengths) ? data.strengths.map(String) : [],
-        food_rule: (["before_food","after_food","none"] as const).includes(data.food_rule)
-          ? data.food_rule : "none",
+        food_rule: (["before_food","after_food","none"] as const).includes(data.food_rule as any)
+          ? (data.food_rule as DrugIntel["food_rule"]) : "none",
         min_interval_hours:
-          Number.isFinite(data.min_interval_hours as any) ? Number(data.min_interval_hours) : null,
+          typeof data.min_interval_hours === "number" && Number.isFinite(data.min_interval_hours)
+            ? data.min_interval_hours
+            : null,
         interactions_to_avoid:
           Array.isArray(data.interactions_to_avoid) ? data.interactions_to_avoid.map(String) : [],
         common_side_effects:
@@ -92,7 +95,7 @@ export const drugIntel = onRequest(
       res.status(200).json(clean);
       return;
     } catch (e: any) {
-      console.error(e);
+      console.error("drugIntel error:", e?.message ?? e);
       res.status(500).json({ error: e?.message ?? "Unknown error" });
       return;
     }

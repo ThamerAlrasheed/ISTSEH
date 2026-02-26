@@ -376,10 +376,35 @@ struct AddLocalMedView: View {
         NavigationStack {
             Form {
                 Section("Basics") {
-                    TextField("Name", text: $name)
-                        .textInputAutocapitalization(.words)
-                        .autocorrectionDisabled()
-                        .onChange(of: name) { _, new in scheduleLookup(for: new) }
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundStyle(.secondary)
+                            .font(.subheadline)
+
+                        TextField("Name", text: $name)
+                            .textInputAutocapitalization(.words)
+                            .autocorrectionDisabled()
+                            .onChange(of: name) { _, new in scheduleLookup(for: new) }
+
+                        if !name.isEmpty {
+                            Button {
+                                name = ""
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.secondary)
+                                    .font(.subheadline)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(Color(.secondarySystemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.primary.opacity(0.12), lineWidth: 0.5)
+                    )
 
                     if !dosageOptions.isEmpty {
                         DosePicker(options: dosageOptions, selection: $selectedDosageOption)

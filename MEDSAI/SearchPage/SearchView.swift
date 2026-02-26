@@ -11,20 +11,47 @@ struct SearchView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 12) {
-                HStack {
-                    TextField("Search medication (e.g., Augmentin, Panadol…)", text: $query)
-                        .textInputAutocapitalization(.words)
-                        .autocorrectionDisabled()
-                        .padding(12)
-                        .background(Color(.secondarySystemBackground))
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .onChange(of: query) { _, new in
-                            scheduleLookup(for: new)
+                // MARK: - Search Bar
+                HStack(spacing: 12) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundStyle(.secondary)
+                            .font(.subheadline)
+
+                        TextField("Search medication (e.g., Augmentin, Panadol…)", text: $query)
+                            .textInputAutocapitalization(.words)
+                            .autocorrectionDisabled()
+                            .onChange(of: query) { _, new in
+                                scheduleLookup(for: new)
+                            }
+
+                        if !query.isEmpty {
+                            Button {
+                                query = ""
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.secondary)
+                                    .font(.subheadline)
+                            }
+                            .buttonStyle(.plain)
                         }
 
-                    if isLoading {
-                        ProgressView().frame(width: 20, height: 20)
+                        if isLoading {
+                            ProgressView()
+                                .controlSize(.small)
+                                .frame(width: 20, height: 20)
+                        }
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color(.secondarySystemBackground))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.primary.opacity(0.12), lineWidth: 0.5)
+                    )
                 }
                 .padding(.horizontal)
 
@@ -98,6 +125,7 @@ struct SearchView: View {
                     }
                 }
             }
+            .background(Color(.systemGroupedBackground).ignoresSafeArea())
             .navigationTitle("Search")
         }
     }

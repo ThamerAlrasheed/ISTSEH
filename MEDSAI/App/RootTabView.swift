@@ -16,8 +16,12 @@ struct RootTabView: View {
                 TodayScheduleView().tag(0)
                 SchedulePageView().tag(1)
                 MedListView().tag(2)
-                SearchView().tag(3)     // 👈 New Search tab content
-                SettingsView().tag(4)
+                SearchView().tag(3)
+                if settings.role == .patient {
+                    PatientSettingsView().tag(4)
+                } else {
+                    SettingsView().tag(4)
+                }
             }
             .toolbar(.hidden, for: .tabBar) // hide Apple's tab bar (iOS 16+)
             .onAppear {

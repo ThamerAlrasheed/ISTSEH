@@ -47,7 +47,35 @@ struct TodayScheduleView: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle("Today")
+            .navigationTitle(settings.activePatientID == nil ? "Today" : "Family Member's Today")
+            .toolbar {
+                if !settings.familyMembers.isEmpty {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Menu {
+                            Button {
+                                settings.activePatientID = nil
+                            } label: {
+                                Label("My Meds", systemImage: "person.circle")
+                            }
+                            
+                            ForEach(settings.familyMembers, id: \.self) { patientId in
+                                Button {
+                                    settings.activePatientID = patientId
+                                } label: {
+                                    Label("Dad's Meds", systemImage: "person.2")
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "person.2.circle.fill")
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 10, weight: .bold))
+                            }
+                            .foregroundStyle(.green)
+                        }
+                    }
+                }
+            }
             .onAppear {
                 today = Calendar.current.startOfDay(for: Date())
                 medsRepo.start()

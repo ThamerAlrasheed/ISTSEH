@@ -1,16 +1,12 @@
 // AppDelegate.swift
 import UIKit
-import FirebaseCore
 import UserNotifications
 
 class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
 
-        // Firebase (your project already uses it)
-        if FirebaseApp.app() == nil {
-            FirebaseApp.configure()
-        }
+        // Supabase initializes lazily via SupabaseManager.shared — no explicit configure needed.
 
         // Notifications: delegate + categories
         NotificationsManager.shared.configure()

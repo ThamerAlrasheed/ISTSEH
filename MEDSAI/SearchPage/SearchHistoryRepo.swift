@@ -1,71 +1,57 @@
 import Foundation
-import FirebaseAuth
-import FirebaseFirestore
 
 @MainActor
 final class SearchHistoryRepo: ObservableObject {
     @Published private(set) var recent: [String] = []
     @Published private(set) var errorMessage: String?
 
-    private var listener: ListenerRegistration?
-    deinit { listener?.remove() }
+    private var supabase: SupabaseManager { .shared }
 
-    private var db: Firestore { Firestore.firestore() }
-
-    private func requireUID() throws -> String {
-        guard let uid = Auth.auth().currentUser?.uid else {
-            throw NSError(
-                domain: "SearchHistoryRepo",
-                code: 401,
-                userInfo: [NSLocalizedDescriptionKey: "User is not signed in."]
-            )
-        }
-        return uid
+    /// Fetch recent searches for the signed-in user (latest first).
+    func start(limit: Int = 10) {
+        guard supabase.currentUserID != nil else { recent = []; return }
+        Task { await fetchRecent(limit: limit) }
     }
 
-    /// Start streaming recent searches for the signed-in user (latest first).
-    func start(limit: Int = 10) {
-        listener?.remove(); listener = nil
-        guard Auth.auth().currentUser != nil else { recent = []; return }
-
+    private func fetchRecent(limit: Int) async {
+        guard let uid = supabase.currentUserID else { return }
         do {
-            let uid = try requireUID()
-            listener = db.collection("users").document(uid)
-                .collection("search_history")
-                .order(by: "ts", descending: true)
-                .limit(to: limit)
-                .addSnapshotListener { [weak self] snap, err in
-                    guard let self else { return }
-                    if let err = err { self.errorMessage = err.localizedDescription; return }
+            struct Row: Decodable { let search_query: String }
+            let rows: [Row] = try await supabase.client
+                .from("search_history")
+                .select("search_query")
+                .eq("user_id", value: uid.uuidString)
+                .order("created_at", ascending: false)
+                .limit(limit)
+                .execute()
+                .value
 
-                    let items = snap?.documents.compactMap { $0.data()["query"] as? String } ?? []
-
-                    // Deduplicate while keeping order
-                    var seen = Set<String>(); var out: [String] = []
-                    for q in items {
-                        let key = q.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                        if !key.isEmpty && !seen.contains(key) {
-                            out.append(q); seen.insert(key)
-                        }
-                    }
-                    self.recent = out
+            // Deduplicate while keeping order
+            var seen = Set<String>(); var out: [String] = []
+            for r in rows {
+                let key = r.search_query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if !key.isEmpty && !seen.contains(key) {
+                    out.append(r.search_query); seen.insert(key)
                 }
+            }
+            self.recent = out
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    /// Append a query to the user’s history (server timestamped).
+    /// Append a query to the user's history.
     func add(query: String) async {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { return }
+        guard !q.isEmpty, let uid = supabase.currentUserID else { return }
         do {
-            let uid = try requireUID()
-            let col = db.collection("users").document(uid).collection("search_history")
-            try await col.addDocument(data: [
-                "query": q,
-                "ts": FieldValue.serverTimestamp()
-            ])
+            try await supabase.client
+                .from("search_history")
+                .insert([
+                    "user_id": uid.uuidString,
+                    "search_query": q
+                ])
+                .execute()
         } catch {
             errorMessage = error.localizedDescription
         }

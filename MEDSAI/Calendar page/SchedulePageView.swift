@@ -76,14 +76,16 @@ struct SchedulePageView: View {
                     Text("No appointments on this day.")
                         .foregroundStyle(.secondary)
 
-                    // Centered, perfectly centered text inside the green pill
-                    HStack {
-                        Spacer()
-                        CenteredPillButton(title: "Add appointment") {
-                            showAddAppointment = true
+                    if settings.role != .patient {
+                        // Centered, perfectly centered text inside the green pill
+                        HStack {
+                            Spacer()
+                            CenteredPillButton(title: "Add appointment") {
+                                showAddAppointment = true
+                            }
+                            .frame(maxWidth: 260)
+                            Spacer()
                         }
-                        .frame(maxWidth: 260)
-                        Spacer()
                     }
                 }
                 .padding(.horizontal, 16)
@@ -112,23 +114,25 @@ struct SchedulePageView: View {
                                     .font(.headline)
                                     .monospacedDigit()
 
-                                Menu {
-                                    Button { editingAppointment = appt } label: {
-                                        Label("Edit", systemImage: "pencil")
-                                    }
-                                    Button(role: .destructive) {
-                                        Task { await appts.delete(appt) }
+                                if settings.role != .patient {
+                                    Menu {
+                                        Button { editingAppointment = appt } label: {
+                                            Label("Edit", systemImage: "pencil")
+                                        }
+                                        Button(role: .destructive) {
+                                            Task { await appts.delete(appt) }
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
                                     } label: {
-                                        Label("Delete", systemImage: "trash")
+                                        Image(systemName: "ellipsis.circle")
+                                            .font(.title3)
+                                            .foregroundStyle(.secondary)
+                                            .padding(.leading, 4)
+                                            .contentShape(Rectangle())
                                     }
-                                } label: {
-                                    Image(systemName: "ellipsis.circle")
-                                        .font(.title3)
-                                        .foregroundStyle(.secondary)
-                                        .padding(.leading, 4)
-                                        .contentShape(Rectangle())
+                                    .buttonStyle(.plain)
                                 }
-                                .buttonStyle(.plain)
                             }
                         }
                         .padding(.horizontal, 16)
@@ -137,17 +141,19 @@ struct SchedulePageView: View {
                         Divider().padding(.leading, 16)
                     }
 
-                    // Centered "Add appointment" pill under list
-                    HStack {
-                        Spacer()
-                        CenteredPillButton(title: "Add appointment") {
-                            showAddAppointment = true
+                    if settings.role != .patient {
+                        // Centered "Add appointment" pill under list
+                        HStack {
+                            Spacer()
+                            CenteredPillButton(title: "Add appointment") {
+                                showAddAppointment = true
+                            }
+                            .frame(maxWidth: 260)
+                            Spacer()
                         }
-                        .frame(maxWidth: 260)
-                        Spacer()
+                        .padding(.top, 8)
+                        .padding(.bottom, 8)
                     }
-                    .padding(.top, 8)
-                    .padding(.bottom, 8)
                 }
             }
         }

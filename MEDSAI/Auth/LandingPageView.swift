@@ -45,6 +45,23 @@ struct LandingPageView: View {
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.large)
+
+                        Text("── or ──")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 10)
+
+                        NavigationLink(destination: CareCodeEntryView()) {
+                            HStack {
+                                Image(systemName: "person.2.fill")
+                                Text("I Have a Family Code")
+                            }
+                            .font(.headline)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 54)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.green)
                     }
                     .frame(maxWidth: 340)
 

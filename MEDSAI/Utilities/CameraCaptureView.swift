@@ -62,6 +62,7 @@ struct CameraCaptureView: View {
     }
 }
 
+@MainActor
 final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate {
     @Published var capturedImage: UIImage? = nil
     @Published var isReady = false
@@ -76,11 +77,10 @@ final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     // MARK: Start / Stop
 
     func start() async throws {
-        // 0) Safety: make sure Info.plist has the key, otherwise iOS will abort.
+        // 0) Safety check
         if Bundle.main.object(forInfoDictionaryKey: "NSCameraUsageDescription") == nil {
             throw NSError(domain: "Camera", code: -10,
-                          userInfo: [NSLocalizedDescriptionKey:
-                                     "Missing NSCameraUsageDescription in Info.plist. Add it to avoid crashes."])
+                          userInfo: [NSLocalizedDescriptionKey: "Missing NSCameraUsageDescription in Info.plist."])
         }
 
         // 1) Permissions
@@ -90,18 +90,16 @@ final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
                 AVCaptureDevice.requestAccess(for: .video) { ok in c.resume(returning: ok) }
             }
             guard granted else {
-                throw NSError(domain: "Camera", code: 1,
-                              userInfo: [NSLocalizedDescriptionKey: "Camera permission denied."])
+                throw NSError(domain: "Camera", code: 1, userInfo: [NSLocalizedDescriptionKey: "Camera permission denied."])
             }
         } else if status != .authorized {
-            throw NSError(domain: "Camera", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "Camera permission denied."])
+            throw NSError(domain: "Camera", code: 1, userInfo: [NSLocalizedDescriptionKey: "Camera permission denied."])
         }
 
-        // 2) Configure + start on the background session queue (fully async, no sync calls)
+        // 2) Configure
         try await configureSessionIfNeeded()
         try await startRunning()
-        await MainActor.run { self.isReady = true }
+        self.isReady = true
     }
 
     func stop() {
@@ -118,65 +116,71 @@ final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
         isCapturing = true
         let settings = AVCapturePhotoSettings()
         settings.flashMode = .off
+        
+        // Use newer API if available for high res
+        if #available(iOS 17.0, *) {
+            // maxPhotoDimensions is preferred
+        } else {
+            settings.isHighResolutionPhotoEnabled = true 
+        }
+        
         photoOutput.capturePhoto(with: settings, delegate: self)
     }
 
     // MARK: Delegate
 
-    func photoOutput(_ output: AVCapturePhotoOutput,
-                     didFinishProcessingPhoto photo: AVCapturePhoto,
-                     error: Error?) {
-        defer { isCapturing = false }
-        if let error = error { present(error.localizedDescription); return }
+    nonisolated func photoOutput(_ output: AVCapturePhotoOutput,
+                                 didFinishProcessingPhoto photo: AVCapturePhoto,
+                                 error: Error?) {
+        if let error = error {
+            Task { @MainActor in self.present(error.localizedDescription); self.isCapturing = false }
+            return
+        }
         guard let data = photo.fileDataRepresentation(),
-              let img = UIImage(data: data) else { present("Could not read image data."); return }
+              let img = UIImage(data: data) else {
+            Task { @MainActor in self.present("Could not read image data."); self.isCapturing = false }
+            return
+        }
         let normalized = img.fixedOrientation()
-        DispatchQueue.main.async { self.capturedImage = normalized }
+        Task { @MainActor in
+            self.capturedImage = normalized
+            self.isCapturing = false
+        }
     }
 
     // MARK: Private async helpers
 
     private func configureSessionIfNeeded() async throws {
-        try await withCheckedThrowingContinuation { cont in
-            sessionQueue.async {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            sessionQueue.async { [weak self] in
+                guard let self else { return }
                 do {
                     if !self.session.inputs.isEmpty && self.session.outputs.contains(self.photoOutput) {
-                        cont.resume(returning: ()) // already configured
+                        cont.resume(returning: ())
                         return
                     }
 
                     self.session.beginConfiguration()
                     self.session.sessionPreset = .photo
 
-                    // Input
-                    guard let device = AVCaptureDevice.default(.builtInWideAngleCamera,
-                                                               for: .video,
-                                                               position: .back) ??
-                                        AVCaptureDevice.default(.builtInWideAngleCamera,
-                                                                for: .video,
-                                                                position: .unspecified) else {
-                        throw NSError(domain: "Camera", code: 2,
-                                      userInfo: [NSLocalizedDescriptionKey: "No camera available."])
+                    guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) ??
+                                        AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .unspecified) else {
+                        throw NSError(domain: "Camera", code: 2, userInfo: [NSLocalizedDescriptionKey: "No camera available."])
                     }
 
-                    // Remove stale inputs
                     for input in self.session.inputs { self.session.removeInput(input) }
 
                     let input = try AVCaptureDeviceInput(device: device)
                     guard self.session.canAddInput(input) else {
-                        throw NSError(domain: "Camera", code: 3,
-                                      userInfo: [NSLocalizedDescriptionKey: "Cannot add camera input."])
+                        throw NSError(domain: "Camera", code: 3, userInfo: [NSLocalizedDescriptionKey: "Cannot add camera input."])
                     }
                     self.session.addInput(input)
 
-                    // Output
-                    if self.session.outputs.contains(self.photoOutput) == false {
+                    if !self.session.outputs.contains(self.photoOutput) {
                         guard self.session.canAddOutput(self.photoOutput) else {
-                            throw NSError(domain: "Camera", code: 4,
-                                          userInfo: [NSLocalizedDescriptionKey: "Cannot add photo output."])
+                            throw NSError(domain: "Camera", code: 4, userInfo: [NSLocalizedDescriptionKey: "Cannot add photo output."])
                         }
                         self.session.addOutput(self.photoOutput)
-                        self.photoOutput.isHighResolutionCaptureEnabled = true
                     }
 
                     self.session.commitConfiguration()
@@ -189,8 +193,9 @@ final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     }
 
     private func startRunning() async throws {
-        try await withCheckedThrowingContinuation { cont in
-            sessionQueue.async {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            sessionQueue.async { [weak self] in
+                guard let self else { return }
                 if self.session.isRunning { cont.resume(returning: ()); return }
                 self.session.startRunning()
                 cont.resume(returning: ())
@@ -201,10 +206,8 @@ final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     // MARK: Error UI
 
     private func present(_ message: String) {
-        DispatchQueue.main.async {
-            self.errorMessage = message
-            self.showError = true
-        }
+        self.errorMessage = message
+        self.showError = true
     }
 
     func clearError() { errorMessage = nil; showError = false }
@@ -223,14 +226,28 @@ struct CameraPreview: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: PreviewView, context: Context) {
-        uiView.videoPreviewLayer.connection?.videoOrientation = uiOrientation()
+        if #available(iOS 17.0, *) {
+            uiView.videoPreviewLayer.connection?.videoRotationAngle = uiRotationAngle()
+        } else {
+            uiView.videoPreviewLayer.connection?.videoOrientation = uiOrientation()
+        }
+    }
+
+    private func uiRotationAngle() -> CGFloat {
+        switch UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first?.interfaceOrientation {
+        case .landscapeLeft: return 180
+        case .landscapeRight: return 0
+        case .portraitUpsideDown: return 270
+        default: return 90 // portrait
+        }
     }
 
     private func uiOrientation() -> AVCaptureVideoOrientation {
         switch UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .first?.interfaceOrientation {
-        case .portrait: return .portrait
         case .landscapeLeft: return .landscapeLeft
         case .landscapeRight: return .landscapeRight
         case .portraitUpsideDown: return .portraitUpsideDown

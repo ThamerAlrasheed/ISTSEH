@@ -1,15 +1,9 @@
 import SwiftUI
-import FirebaseAuth
-import FirebaseFirestore
-import Firebase
-import FirebaseCore
 
 // MARK: - Validators
 fileprivate func isValidEmail(_ email: String) -> Bool {
     let e = email.trimmingCharacters(in: .whitespacesAndNewlines)
-    // Simple, robust email regex
-    let pattern =
-    #"^[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"#
+    let pattern = #"^[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"#
     return e.range(of: pattern, options: .regularExpression) != nil
 }
 
@@ -18,7 +12,7 @@ fileprivate func isStrongPassword(_ s: String) -> Bool {
     guard s.count >= 8 else { return false }
     let upper = s.range(of: #".*[A-Z].*"#, options: .regularExpression) != nil
     let lower = s.range(of: #".*[a-z].*"#, options: .regularExpression) != nil
-    let digit = s.range(of: #".*\d.*"#, options: .regularExpression) != nil
+    let digit = s.range(of: #".*\d.*"#,   options: .regularExpression) != nil
     return upper && lower && digit
 }
 
@@ -37,6 +31,8 @@ struct LoginPageView: View {
     private var emailOK: Bool { isValidEmail(email) }
     private var passwordOK: Bool { isStrongPassword(password) }
     private var isValid: Bool { emailOK && passwordOK }
+    
+    private var supabase: SupabaseManager { .shared }
     
     var body: some View {
         VStack(spacing: 32) {
@@ -76,7 +72,7 @@ struct LoginPageView: View {
                 .focused($focusedField, equals: .password)
                 .textContentType(.password)
                 .submitLabel(.go)
-                .onSubmit { if isValid { completeAuth() } }
+                .onSubmit { if isValid { Task { await completeAuth() } } }
                 
                 if !password.isEmpty && !passwordOK {
                     InlineError("Password must be at least 8 characters and include upper, lower, and a number.")
@@ -91,7 +87,7 @@ struct LoginPageView: View {
             .padding(.horizontal)
             
             Button {
-                completeAuth()
+                Task { await completeAuth() }
             } label: {
                 HStack {
                     if isLoading { ProgressView().controlSize(.small) }
@@ -121,9 +117,9 @@ struct LoginPageView: View {
             .buttonStyle(.plain)
             .disabled(!emailOK || isLoading)
             
-            // Don’t have an account? Sign up
+            // Don't have an account? Sign up
             NavigationLink(destination: SignUpPageView()) {
-                Text("Don’t have an account? Sign up")
+                Text("Don't have an account? Sign up")
                     .underline()
                     .foregroundStyle(.green)
             }
@@ -140,39 +136,40 @@ struct LoginPageView: View {
         }
     }
     
-    private func completeAuth() {
+    private func completeAuth() async {
         guard isValid, !isLoading else { return }
         isLoading = true
         let emailTrimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
         
-        Auth.auth().signIn(withEmail: emailTrimmed, password: password) { result, error in
-            isLoading = false
-            if let error = error {
+        do {
+            try await supabase.client.auth.signIn(
+                email: emailTrimmed,
+                password: password
+            )
+            
+            // Update app state
+            await MainActor.run {
+                settings.didChooseEntry = true
+                settings.onboardingCompleted = true
+            }
+            
+            // Load user routine from Postgres
+            await settings.loadRoutineFromSupabase()
+        } catch {
+            await MainActor.run {
                 alertMessage = error.localizedDescription
                 showAlert = true
-                return
             }
-
-            // Upsert email into Firestore user doc (helpful if older accounts missed it)
-            if let uid = result?.user.uid {
-                let db = Firestore.firestore()
-                db.collection("users").document(uid).setData(
-                    ["email": emailTrimmed, "updatedAt": FieldValue.serverTimestamp()],
-                    merge: true
-                )
-            }
-
-            // RootView will switch via auth listener; keep flags for instant UI
-            settings.didChooseEntry = true
-            settings.onboardingCompleted = true
         }
+        
+        await MainActor.run { isLoading = false }
     }
     
     private func sendReset() async {
         guard emailOK else { return }
         let emailTrimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            try await Auth.auth().sendPasswordReset(withEmail: emailTrimmed)
+            try await supabase.client.auth.resetPasswordForEmail(emailTrimmed)
             alertMessage = "Password reset email sent."
         } catch {
             alertMessage = error.localizedDescription

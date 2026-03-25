@@ -1,5 +1,4 @@
 import SwiftUI
-import FirebaseAuth
 
 struct RootView: View {
     @EnvironmentObject var settings: AppSettings
@@ -9,15 +8,16 @@ struct RootView: View {
             if shouldShowMainApp {
                 RootTabView()
             } else {
-                LandingPageView() // your existing login/signup landing screen
+                LandingPageView()
             }
         }
         .animation(.default, value: shouldShowMainApp)
     }
 
     private var shouldShowMainApp: Bool {
-        settings.onboardingCompleted &&
-        settings.didChooseEntry &&
-        Auth.auth().currentUser != nil
+        // Regular/caregiver users: require Supabase Auth session
+        // Patient users: require device token (passwordless)
+        guard settings.onboardingCompleted && settings.didChooseEntry else { return false }
+        return SupabaseManager.shared.currentUserID != nil
     }
 }

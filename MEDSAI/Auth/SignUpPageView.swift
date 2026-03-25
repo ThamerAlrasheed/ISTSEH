@@ -1,6 +1,5 @@
 import SwiftUI
-import FirebaseAuth
-import FirebaseFirestore
+import Supabase
 
 struct SignUpPageView: View {
     // Flow steps
@@ -9,7 +8,7 @@ struct SignUpPageView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var step: Step = .account
 
-    // Step 1 — account (validate & check only; DO NOT create user here)
+    // Step 1 — account
     @State private var email = ""
     @State private var password = ""
     @State private var confirmPassword = ""
@@ -25,12 +24,14 @@ struct SignUpPageView: View {
 
     // Step 3 — health
     @State private var dateOfBirth: Date = Calendar.current.date(byAdding: .year, value: -20, to: Date()) ?? Date()
-    @State private var allergies = ""
-    @State private var chronicDiseases = ""
+    @State private var allergyList: [String] = []
+    @State private var conditionList: [String] = []
 
     // UX
     @State private var busy = false
     @State private var errorText: String?
+
+    private var supabase: SupabaseManager { .shared }
 
     // MARK: - Validators
     private var emailValid: Bool {
@@ -38,7 +39,6 @@ struct SignUpPageView: View {
         let pattern = #"^[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"#
         return e.range(of: pattern, options: .regularExpression) != nil
     }
-    /// >= 8 chars, at least one upper, one lower, one digit
     private var strongPassword: Bool {
         guard password.count >= 8 else { return false }
         let up = password.range(of: #".*[A-Z].*"#, options: .regularExpression) != nil
@@ -50,25 +50,19 @@ struct SignUpPageView: View {
 
     private var canNextFromAccount: Bool { emailValid && strongPassword && password == confirmPassword }
     private var canNextFromIdentity: Bool {
-        !firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         !lastName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        // phone optional; add validation if needed
     }
-    private var canFinish: Bool { allergies.count <= 100 && chronicDiseases.count <= 100 }
+    private var canFinish: Bool { true }
 
     var body: some View {
         ZStack {
                 ScrollView {
                     VStack(spacing: 20) {
-                        // Header (big, like your screenshot)
                         header
-
-                        // Step progress
                         ProgressView(value: Double(step.rawValue + 1), total: 3)
                             .tint(Color(.systemGreen))
                             .padding(.bottom, 4)
 
-                        // Step content
                         Group {
                             switch step {
                             case .account: accountCard
@@ -78,7 +72,6 @@ struct SignUpPageView: View {
                         }
                         .animation(.easeInOut, value: step)
 
-                        // Error banner
                         if let err = errorText {
                             Text(err)
                                 .font(.footnote)
@@ -87,7 +80,6 @@ struct SignUpPageView: View {
                                 .padding(.horizontal)
                         }
 
-                        // Controls
                         controls
                         Spacer(minLength: 10)
                     }
@@ -101,16 +93,12 @@ struct SignUpPageView: View {
                         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
                 }
             }
-        // Toolbar: bold "ISTSEH" centered
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Text("ISTSEH").font(.headline.bold())
             }
         }
         .navigationBarTitleDisplayMode(.inline)
-        // live cap to 100 chars
-        .onChange(of: allergies) { if $1.count > 100 { allergies = String($1.prefix(100)) } }
-        .onChange(of: chronicDiseases) { if $1.count > 100 { chronicDiseases = String($1.prefix(100)) } }
     }
 
     // MARK: - Header
@@ -188,29 +176,19 @@ struct SignUpPageView: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text("Allergies (max 100)").font(.subheadline).foregroundStyle(.secondary)
-                    Spacer()
-                    Text("\(allergies.count)/100").font(.caption).foregroundStyle(.secondary)
-                }
-                TextField("e.g. Penicillin, Peanuts", text: $allergies, axis: .vertical)
-                    .lineLimit(2...4)
-                    .multilineTextAlignment(.leading)
-                    .padding(12)
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                MultiSelectorView(
+                    title: "Allergies",
+                    presets: ["Peanuts", "Milk", "Eggs", "Tree Nuts", "Soy", "Wheat", "Fish", "Shellfish", "Penicillin", "Aspirin", "Ibuprofen", "Latex"],
+                    selectedItems: $allergyList
+                )
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text("Chronic conditions (max 100)").font(.subheadline).foregroundStyle(.secondary)
-                    Spacer()
-                    Text("\(chronicDiseases.count)/100").font(.caption).foregroundStyle(.secondary)
-                }
-                TextField("e.g. Diabetes, Hypertension", text: $chronicDiseases, axis: .vertical)
-                    .lineLimit(2...4)
-                    .multilineTextAlignment(.leading)
-                    .padding(12)
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                MultiSelectorView(
+                    title: "Chronic Conditions",
+                    presets: ["Diabetes", "Hypertension", "Asthma", "Arthritis", "CKD", "COPD", "Heart Disease", "Anxiety", "Depression"],
+                    selectedItems: $conditionList
+                )
             }
         }
         .cardStyle()
@@ -250,7 +228,9 @@ struct SignUpPageView: View {
         errorText = nil
         switch step {
         case .account:
-            await checkEmailThenProceed()
+            // Simple client-side validation only; Supabase will reject duplicate emails at signup time.
+            guard canNextFromAccount else { return }
+            withAnimation { step = .identity }
         case .identity:
             withAnimation { step = .health }
         case .health:
@@ -258,26 +238,7 @@ struct SignUpPageView: View {
         }
     }
 
-    /// Step 1: only validate & check availability; do NOT create auth user here.
-    private func checkEmailThenProceed() async {
-        guard canNextFromAccount else { return }
-        busy = true
-        defer { busy = false }
-
-        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        do {
-            let methods = try await Auth.auth().fetchSignInMethods(forEmail: trimmed)
-            if !methods.isEmpty {
-                errorText = "This email is already registered. Try logging in or use a different email."
-                return
-            }
-            withAnimation { step = .identity }
-        } catch {
-            errorText = error.localizedDescription
-        }
-    }
-
-    /// Final step: create Firebase Auth user, then write profile to Firestore.
+    /// Final step: create Supabase Auth user, then write profile to Postgres.
     private func finish() async {
         guard canFinish else { return }
         busy = true
@@ -286,32 +247,41 @@ struct SignUpPageView: View {
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
 
         do {
-            // 1) Create Auth user now
-            let result = try await Auth.auth().createUser(withEmail: trimmedEmail, password: password)
-            let uid = result.user.uid
+            // 1) Create Auth user via Supabase
+            let authResponse = try await supabase.client.auth.signUp(
+                email: trimmedEmail,
+                password: password
+            )
 
-            // 2) Save profile document
-            let profile: [String: Any] = [
-                "email": trimmedEmail,
-                "firstName": firstName.trimmingCharacters(in: .whitespacesAndNewlines),
-                "lastName":  lastName.trimmingCharacters(in: .whitespacesAndNewlines),
-                "phoneNumber": phoneNumber.trimmingCharacters(in: .whitespacesAndNewlines),
-                "dateOfBirth": Timestamp(date: dateOfBirth),
-                "allergies": String(allergies.prefix(100)).trimmingCharacters(in: .whitespacesAndNewlines),
-                "chronicDiseases": String(chronicDiseases.prefix(100)).trimmingCharacters(in: .whitespacesAndNewlines),
-                "createdAt": FieldValue.serverTimestamp(),
-                "updatedAt": FieldValue.serverTimestamp()
+            guard let userId = authResponse.session?.user.id else {
+                errorText = "Account created but session unavailable. Please log in."
+                return
+            }
+
+            // 3) Insert profile into the users table
+            let isoFormatter = ISO8601DateFormatter()
+            isoFormatter.formatOptions = [.withFullDate]
+
+            let profile: [String: AnyJSON] = [
+                "id": .string(userId.uuidString),
+                "email": .string(trimmedEmail),
+                "first_name": .string(firstName.trimmingCharacters(in: .whitespacesAndNewlines)),
+                "last_name": .string(lastName.trimmingCharacters(in: .whitespacesAndNewlines)),
+                "phone_number": .string(phoneNumber.trimmingCharacters(in: .whitespacesAndNewlines)),
+                "date_of_birth": .string(isoFormatter.string(from: dateOfBirth)),
+                "allergies": .array(allergyList.map { .string($0) }),
+                "conditions": .array(conditionList.map { .string($0) })
             ]
 
-            try await Firestore.firestore()
-                .collection("users")
-                .document(uid)
-                .setData(profile, merge: true)
+            try await supabase.client
+                .from("users")
+                .upsert(profile)
+                .execute()
 
-            // 3) Done
+            // 4) Done
             dismiss()
         } catch {
-            errorText = "Couldn’t create account: \(error.localizedDescription)"
+            errorText = "Couldn't create account: \(error.localizedDescription)"
         }
     }
 }

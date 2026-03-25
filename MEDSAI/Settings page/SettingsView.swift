@@ -1,6 +1,4 @@
 import SwiftUI
-import FirebaseAuth
-import FirebaseFirestore
 import UserNotifications
 
 struct SettingsView: View {
@@ -9,7 +7,7 @@ struct SettingsView: View {
     // MARK: - Profile (split first / last)
     @AppStorage("profile.firstName") private var firstName: String = ""
     @AppStorage("profile.lastName")  private var lastName: String  = ""
-    @AppStorage("profile.dob")       private var dobISO: String    = ""   // ISO yyyy-mm-dd
+    @AppStorage("profile.dob")       private var dobISO: String    = ""
 
     // MARK: - Notifications toggles
     @AppStorage("notify.enabled")      private var notificationsEnabled: Bool = true
@@ -32,25 +30,24 @@ struct SettingsView: View {
     @AppStorage("appearance.language") private var languageCode: String =
         Locale.current.language.languageCode?.identifier ?? "en"
 
-    // Firestore handle
-    private var db: Firestore { Firestore.firestore() }
+    private var supabase: SupabaseManager { .shared }
 
     var body: some View {
         NavigationStack {
             List {
                 profileSection
+                familySection
                 dailyRoutineSection
                 notificationsSection
                 appearanceSection
                 helpLegalSection
-                signOutSection  // bottom
+                signOutSection
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Settings")
-            .tint(.green) // app accent
+            .tint(.green)
             .onAppear {
-                hydrateNamesFromAuthIfNeeded()
-                Task { await hydrateNamesFromFirestoreIfNeeded() }
+                Task { await hydrateNamesFromSupabase() }
                 Task { await ensureNotificationAuthIfEnabled() }
             }
             .onChange(of: firstName) { _, _ in Task { await persistNames() } }
@@ -93,12 +90,25 @@ struct SettingsView: View {
         }
     }
 
+    private var familySection: some View {
+        Section(header: Text("Family / Caregiver")) {
+            NavigationLink {
+                FamilySettingsView()
+                    .environmentObject(settings)
+            } label: {
+                HStack {
+                    Image(systemName: "person.2.fill").foregroundStyle(.green)
+                    Text("My Family")
+                }
+            }
+        }
+    }
+
     private var dailyRoutineSection: some View {
         Section(
             header: Text("Daily routine"),
             footer: Text("These times help schedule doses and appointment reminders.")
         ) {
-            // Uses your existing TimeRow(title:comps:) from OnboardingFlow
             TimeRow(title: "Wake time", comps: $settings.wakeup)
             TimeRow(title: "Bedtime",   comps: $settings.bedtime)
             TimeRow(title: "Breakfast", comps: $settings.breakfast)
@@ -110,7 +120,7 @@ struct SettingsView: View {
     private var notificationsSection: some View {
         Section(
             header: Text("Notifications"),
-            footer: Text("If enabled, you’ll be reminded at dose time. A second reminder can be sent 15 minutes later if you haven’t marked the dose as taken.")
+            footer: Text("If enabled, you'll be reminded at dose time. A second reminder can be sent 15 minutes later if you haven't marked the dose as taken.")
         ) {
             Toggle(isOn: $notificationsEnabled) {
                 Text("Enable notifications")
@@ -182,7 +192,7 @@ struct SettingsView: View {
             } label: {
                 HStack {
                     Image(systemName: "questionmark.circle").foregroundStyle(.green)
-                    Text("FAQ").foregroundStyle(.green) // make the label text green too
+                    Text("FAQ").foregroundStyle(.green)
                 }
             }
 
@@ -210,7 +220,6 @@ struct SettingsView: View {
         }
     }
 
-    /// Sign out button at the very bottom
     private var signOutSection: some View {
         Section {
             Button(role: .destructive) {
@@ -224,27 +233,23 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Name hydration & persistence
+    // MARK: - Name hydration & persistence (Supabase)
 
-    private func hydrateNamesFromAuthIfNeeded() {
-        guard (firstName.isEmpty || lastName.isEmpty),
-              let dn = Auth.auth().currentUser?.displayName,
-              !dn.trimmingCharacters(in: .whitespaces).isEmpty
-        else { return }
-
-        let parts = dn.split(separator: " ", omittingEmptySubsequences: true)
-        if parts.count >= 1 && firstName.isEmpty { firstName = String(parts[0]) }
-        if parts.count >= 2 && lastName.isEmpty  { lastName  = parts.dropFirst().joined(separator: " ") }
-    }
-
-    private func hydrateNamesFromFirestoreIfNeeded() async {
-        guard (firstName.isEmpty || lastName.isEmpty),
-              let uid = Auth.auth().currentUser?.uid else { return }
+    private func hydrateNamesFromSupabase() async {
+        guard firstName.isEmpty || lastName.isEmpty,
+              let uid = supabase.currentUserID else { return }
         do {
-            let doc = try await db.collection("users").document(uid).getDocument()
-            if doc.exists {
-                if firstName.isEmpty, let fn = doc.get("firstName") as? String, !fn.isEmpty { firstName = fn }
-                if lastName.isEmpty,  let ln = doc.get("lastName")  as? String, !ln.isEmpty { lastName  = ln }
+            struct Row: Decodable { let first_name: String?; let last_name: String? }
+            let rows: [Row] = try await supabase.client
+                .from("users")
+                .select("first_name, last_name")
+                .eq("id", value: uid.uuidString)
+                .limit(1)
+                .execute()
+                .value
+            if let row = rows.first {
+                if firstName.isEmpty, let fn = row.first_name, !fn.isEmpty { firstName = fn }
+                if lastName.isEmpty,  let ln = row.last_name,  !ln.isEmpty { lastName  = ln }
             }
         } catch {
             // Ignore silently; app still works
@@ -252,44 +257,37 @@ struct SettingsView: View {
     }
 
     private func persistNames() async {
-        // Update Firebase Auth displayName
+        guard let uid = supabase.currentUserID else { return }
         let trimmedFirst = firstName.trimmingCharacters(in: .whitespaces)
         let trimmedLast  = lastName.trimmingCharacters(in: .whitespaces)
-        let display = [trimmedFirst, trimmedLast].filter { !$0.isEmpty }.joined(separator: " ")
 
-        if let user = Auth.auth().currentUser {
-            let req = user.createProfileChangeRequest()
-            req.displayName = display.isEmpty ? nil : display
-            req.commitChanges(completion: { _ in })
-        }
-
-        // Also store to Firestore (merge with existing)
-        if let uid = Auth.auth().currentUser?.uid {
-            do {
-                try await db.collection("users").document(uid).setData([
-                    "firstName": trimmedFirst,
-                    "lastName": trimmedLast,
-                    "updatedAt": FieldValue.serverTimestamp()
-                ], merge: true)
-            } catch {
-                // Ignore write errors for now; UI remains responsive
-            }
+        do {
+            try await supabase.client
+                .from("users")
+                .update([
+                    "first_name": trimmedFirst,
+                    "last_name": trimmedLast
+                ])
+                .eq("id", value: uid.uuidString)
+                .execute()
+        } catch {
+            // Ignore write errors for now
         }
     }
 
     // MARK: - Helpers
 
     private func currentEmail() -> String {
-        Auth.auth().currentUser?.email ?? "Not available"
+        supabase.client.auth.currentSession?.user.email ?? "Not available"
     }
 
     private func signOut() {
-        do {
-            try Auth.auth().signOut()
-            settings.didChooseEntry = false
-            settings.onboardingCompleted = false
-        } catch {
-            // optionally present an alert
+        Task {
+            try? await supabase.client.auth.signOut()
+            await MainActor.run {
+                settings.didChooseEntry = false
+                settings.onboardingCompleted = false
+            }
         }
     }
 
@@ -350,7 +348,7 @@ private struct FAQView: View {
             }
             Section(header: Text("Notifications")) {
                 Text("How can I change reminders?")
-                Text("Why didn’t I receive a notification?")
+                Text("Why didn't I receive a notification?")
             }
         }
         .navigationTitle("FAQ")

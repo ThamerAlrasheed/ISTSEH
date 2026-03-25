@@ -1,0 +1,468 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{titlesec}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=blue
+}
+
+\definecolor{medgreen}{RGB}{24,126,73}
+\titleformat{\section}{\large\bfseries\color{medgreen}}{\thesection}{0.75em}{}
+\titleformat{\subsection}{\normalsize\bfseries\color{medgreen}}{\thesubsection}{0.75em}{}
+
+\setlist[itemize]{leftmargin=1.5em}
+\setlist[enumerate]{leftmargin=1.5em}
+
+\begin{document}
+
+\begin{center}
+{\Huge \textbf{MEDSAI App Development Requirements}}\\[0.4cm]
+{\large Simple product requirements document}\\[0.2cm]
+{\large March 2, 2026}
+\end{center}
+
+\vspace{0.5cm}
+
+\tableofcontents
+\newpage
+
+\section{What This Document Is}
+This is a simple development requirements page for the MEDSAI app. It includes:
+\begin{itemize}
+    \item the features you asked for,
+    \item the main things already found in the current app,
+    \item the extra things the app should have so it feels complete and usable.
+\end{itemize}
+
+\section{About the App}
+MEDSAI is a medication and health schedule app. The main goal is to help users remember their medicine, understand what each medicine does, avoid unsafe conflicts, and allow caregivers to help manage other people.
+
+\section{What Already Exists in the Current App}
+From the current codebase, the app already has a good starting point:
+\begin{itemize}
+    \item login and sign up,
+    \item onboarding for setting meal times and sleep times,
+    \item tabs for Today, Calendar, Meds, Search, and Settings,
+    \item adding and editing medications,
+    \item medication search,
+    \item appointments and calendar view,
+    \item reminder notifications,
+    \item camera support and photo upload support,
+    \item scheduling logic based on meals, sleep, and dose frequency,
+    \item basic medication interaction checking.
+\end{itemize}
+
+\section{Main Features Required}
+
+\subsection{1. Smart Scheduling}
+The app should create medication schedules based on the user's daily routine.
+
+It should consider:
+\begin{itemize}
+    \item breakfast time,
+    \item lunch time,
+    \item dinner time,
+    \item wake-up time,
+    \item bedtime,
+    \item medication frequency,
+    \item before food or after food instructions,
+    \item minimum hours between doses,
+    \item conflicts between medications.
+\end{itemize}
+
+The goal is to make the schedule feel personal and realistic, not random.
+
+\subsection{2. Medical Profile Safety Checks}
+The app should raise warning flags when a medication does not fit the person's medical profile.
+
+This includes checking against:
+\begin{itemize}
+    \item allergies,
+    \item chronic diseases,
+    \item age,
+    \item other medications,
+    \item food restrictions when relevant,
+    \item future support for pregnancy or other special conditions.
+\end{itemize}
+
+Warnings should be clear and easy to understand. The app should not try to act like a doctor, but it should clearly tell the user when something may be unsafe.
+
+\subsection{3. Add Medications in Different Ways}
+The app should allow medications to be added through:
+\begin{itemize}
+    \item manual entry,
+    \item search,
+    \item photo upload,
+    \item camera capture.
+\end{itemize}
+
+When using a photo or camera, the app should try to recognize the medication, then show the result to the user for confirmation before saving anything.
+
+\subsection{4. Missed Dose Follow-Up}
+The app should keep checking whether the user took the medication or not.
+
+If a dose is not marked as taken:
+\begin{itemize}
+    \item the app sends a reminder,
+    \item the app sends a second follow-up reminder after some time,
+    \item the app asks a simple question like:
+    \begin{itemize}
+        \item Did you take it?
+        \item Did you skip it?
+        \item Do you want help?
+    \end{itemize}
+\end{itemize}
+
+If the dose is missed and the medicine is important, the app should be able to notify the caregiver too.
+
+\subsection{5. Medication Search and Information}
+The app should let users search for a medicine and get useful information such as:
+\begin{itemize}
+    \item what it is used for,
+    \item how to use it,
+    \item common side effects,
+    \item warnings,
+    \item food role,
+    \item strengths,
+    \item interactions to avoid.
+\end{itemize}
+
+The current app already has medication search, so this should be improved and made more complete.
+
+\subsection{6. Caregiver Accounts}
+A caregiver should be able to create an account and manage up to two people in the first version.
+
+The caregiver should be able to:
+\begin{itemize}
+    \item add dependents using their mobile numbers,
+    \item send direct invitations to the app,
+    \item see whether the invitation was accepted,
+    \item receive alerts about missed doses or serious warnings,
+    \item follow the dependent's medication schedule.
+\end{itemize}
+
+\subsection{7. Notifications}
+The app should send notifications for:
+\begin{itemize}
+    \item medication time,
+    \item follow-up after a missed dose,
+    \item appointments,
+    \item caregiver alerts for missed doses,
+    \item important medication warning cases.
+\end{itemize}
+
+Notifications should be easy to control from settings.
+
+\section{Important Screens the App Should Have}
+\begin{itemize}
+    \item Login and sign up
+    \item Onboarding
+    \item Today screen
+    \item Calendar screen
+    \item Medications screen
+    \item Search screen
+    \item Settings screen
+    \item Add medication screen
+    \item Medication review screen after search or camera scan
+    \item Caregiver dashboard
+    \item Dependent invitation screen
+    \item Safety warning popup or page
+\end{itemize}
+
+\section{Medication Data Needed}
+Each medication should have these main fields:
+\begin{itemize}
+    \item medication name,
+    \item dosage,
+    \item frequency per day,
+    \item start date,
+    \item end date,
+    \item food rule,
+    \item notes,
+    \item ingredients if available,
+    \item minimum interval between doses,
+    \item archive status.
+\end{itemize}
+
+\section{User Profile Data Needed}
+Each user profile should include:
+\begin{itemize}
+    \item first name,
+    \item last name,
+    \item email,
+    \item phone number,
+    \item date of birth,
+    \item allergies,
+    \item chronic conditions,
+    \item daily routine,
+    \item notification preferences,
+    \item language.
+\end{itemize}
+
+\section{Caregiver and Dependent Data}
+The app should support:
+\begin{itemize}
+    \item caregiver account type,
+    \item dependent links,
+    \item invitation status,
+    \item caregiver access permissions,
+    \item logs for missed doses and alerts.
+\end{itemize}
+
+\section{Backend and Technical Needs}
+The current app already uses Firebase, and that is a good base to continue with.
+
+Main backend needs:
+\begin{itemize}
+    \item Firebase Authentication for accounts,
+    \item Firestore for user, medication, appointment, and caregiver data,
+    \item cloud function or backend API for medication search and image analysis,
+    \item notification support,
+    \item a better stored history of doses so the app can track taken and missed doses properly across devices.
+\end{itemize}
+
+\section{Simple Methodology for Main Features}
+This section explains in a simple way how the important features should work internally.
+
+\subsection{1. How Medication Interaction Checking Should Work}
+To support the interaction feature properly, the app should not depend only on the visible medication name.
+
+The general method should be:
+\begin{enumerate}
+    \item Take the medication name entered by the user.
+    \item Try to match it to a known medication from the medication database or search provider.
+    \item Extract active ingredients if available.
+    \item Normalize names so brand names and generic names can be linked together.
+    \item Compare the medication against the user's other active medications.
+    \item Compare by:
+    \begin{itemize}
+        \item exact ingredient match,
+        \item ingredient class,
+        \item known aliases,
+        \item known interaction rules.
+    \end{itemize}
+    \item Return one of the following:
+    \begin{itemize}
+        \item safe together,
+        \item keep separate by a number of hours,
+        \item avoid together,
+        \item unclear so needs manual review.
+    \end{itemize}
+\end{enumerate}
+
+Example idea:
+\begin{itemize}
+    \item User adds medicine A.
+    \item The system finds its ingredients.
+    \item The system compares those ingredients with medicines B and C already in the profile.
+    \item If ingredient classes conflict, the app shows a warning with a simple explanation.
+\end{itemize}
+
+This is the same style of logic the current app already starts to use, so it should be expanded instead of replaced.
+
+\subsection{2. How Profile-Based Safety Checking Should Work}
+The app should also compare medication data against the user's profile.
+
+General method:
+\begin{enumerate}
+    \item Read user profile data such as allergies, chronic conditions, age, and future optional fields.
+    \item Read medication warnings, ingredients, contraindications, and condition-related restrictions.
+    \item Check for direct matches, for example:
+    \begin{itemize}
+        \item allergy matches ingredient,
+        \item chronic disease matches warning rule,
+        \item medication may be risky for the user's age group.
+    \end{itemize}
+    \item Show the result as a simple warning level:
+    \begin{itemize}
+        \item low,
+        \item medium,
+        \item high.
+    \end{itemize}
+    \item Ask the user to review the warning before continuing when needed.
+\end{enumerate}
+
+\subsection{3. How Smart Scheduling Should Work}
+The scheduling feature should build realistic medication times based on the user's day.
+
+General method:
+\begin{enumerate}
+    \item Read wake-up, sleep, and meal times.
+    \item Read medication frequency and food rules.
+    \item If medicine is before food, place it before a meal.
+    \item If medicine is after food, place it after a meal.
+    \item If there is no food rule, spread it across the user's awake time.
+    \item Respect minimum hours between doses.
+    \item Check whether two medicines can be grouped together or need separation.
+    \item Generate final dose times for Today and Calendar views.
+\end{enumerate}
+
+The schedule should be re-generated whenever routine times or medications change.
+
+\subsection{4. How Missed Dose Handling Should Work}
+The app should not only send reminders. It should also follow up when a dose is not confirmed.
+
+General method:
+\begin{enumerate}
+    \item Schedule the main reminder at medication time.
+    \item Wait for the user to mark the dose as taken.
+    \item If there is no action after the grace period, send a follow-up reminder.
+    \item Ask the user what happened:
+    \begin{itemize}
+        \item taken,
+        \item skipped,
+        \item forgot,
+        \item need help.
+    \end{itemize}
+    \item Save the result in dose history.
+    \item If the medication is important and still unconfirmed, notify the caregiver if one is linked.
+\end{enumerate}
+
+\subsection{5. How Camera Medication Recognition Should Work}
+The camera feature should help the user add medicine faster, but still keep the user in control.
+
+General method:
+\begin{enumerate}
+    \item User takes a picture or uploads one.
+    \item The image is sent to an OCR or recognition service.
+    \item The system tries to read:
+    \begin{itemize}
+        \item medication name,
+        \item strength,
+        \item form,
+        \item packaging hints.
+    \end{itemize}
+    \item The system searches for the closest medication match.
+    \item The user sees a review page with the suggested result.
+    \item The user confirms or edits the data before saving.
+\end{enumerate}
+
+If confidence is low, the app should clearly ask the user to choose manually.
+
+\subsection{6. How Medication Search Should Work}
+The search feature should work as both an education feature and an add-medication helper.
+
+General method:
+\begin{enumerate}
+    \item User types a medication name.
+    \item The app searches the main medication service.
+    \item If that fails, the app uses a fallback provider.
+    \item The app returns useful fields like purpose, usage, side effects, warnings, strengths, and food role.
+    \item The result can also be saved as a reusable catalog item.
+\end{enumerate}
+
+\subsection{7. How Caregiver Linking Should Work}
+The caregiver feature should be simple and controlled.
+
+General method:
+\begin{enumerate}
+    \item Caregiver creates an account.
+    \item Caregiver enters the dependent's mobile number.
+    \item The system creates an invitation and sends it.
+    \item The dependent opens the invitation and accepts it.
+    \item The system creates the caregiver-dependent link.
+    \item From then on, missed doses and important alerts can be shared with the caregiver.
+\end{enumerate}
+
+\subsection{8. How Notifications Should Work}
+Notifications should be tied to real user actions and saved state.
+
+General method:
+\begin{enumerate}
+    \item Create notifications from the generated schedule and appointments.
+    \item Allow quick actions where possible, such as marking a dose as taken.
+    \item Cancel follow-up reminders if the dose is confirmed.
+    \item Rebuild notifications whenever medication or schedule data changes.
+\end{enumerate}
+
+\section{What Should Be Improved from the Current App}
+These improvements are important even if they were not directly written in the original request:
+\begin{itemize}
+    \item store dose history in the database, not only locally,
+    \item make safety checks more complete using the medical profile,
+    \item finish the camera-to-add-medication flow,
+    \item add caregiver linking and invitation flow,
+    \item make warnings clearer and easier to understand,
+    \item support Arabic well,
+    \item improve accessibility for larger text and older users,
+    \item add analytics for missed doses and reminder success,
+    \item add proper logs for important events and failures.
+\end{itemize}
+
+\section{Basic User Flow}
+
+\subsection{Patient Flow}
+\begin{enumerate}
+    \item Create account or log in.
+    \item Set meal times and sleep times.
+    \item Add medications manually, by search, or by camera.
+    \item Review safety warnings if any exist.
+    \item Receive a schedule.
+    \item Get reminders and mark doses as taken or missed.
+    \item View appointments and medication info anytime.
+\end{enumerate}
+
+\subsection{Caregiver Flow}
+\begin{enumerate}
+    \item Create caregiver account.
+    \item Add up to two people by mobile number.
+    \item Send invitations.
+    \item Track whether they accepted.
+    \item View schedules and missed doses.
+    \item Get notifications when something important happens.
+\end{enumerate}
+
+\section{Testing Needs}
+The app should be tested for:
+\begin{itemize}
+    \item schedule generation,
+    \item medication conflicts,
+    \item profile-based warnings,
+    \item notification behavior,
+    \item missed-dose follow-up,
+    \item camera medication flow,
+    \item caregiver invitation flow,
+    \item Arabic support,
+    \item offline and sync behavior.
+\end{itemize}
+
+\section{Simple Development Priorities}
+
+\subsection{Phase 1}
+\begin{itemize}
+    \item finish medication camera flow,
+    \item improve dose tracking,
+    \item improve scheduling and warning logic,
+    \item improve search information quality.
+\end{itemize}
+
+\subsection{Phase 2}
+\begin{itemize}
+    \item add caregiver accounts,
+    \item add invitations by phone number,
+    \item add caregiver notifications and monitoring.
+\end{itemize}
+
+\subsection{Phase 3}
+\begin{itemize}
+    \item improve analytics,
+    \item improve accessibility,
+    \item improve Arabic support,
+    \item production hardening and cleanup.
+\end{itemize}
+
+\section{Final Notes}
+This project is not just a reminder app. It should feel like a smart medication assistant that helps users manage medicines safely and helps caregivers support them when needed.
+
+The current codebase already has a strong base. The main next step is to connect everything properly, complete the missing flows, and make the safety and caregiver side much stronger.
+
+\end{document}

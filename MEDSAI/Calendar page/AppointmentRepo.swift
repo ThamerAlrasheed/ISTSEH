@@ -1,58 +1,38 @@
 import Foundation
 import Combine
-import FirebaseAuth
-import FirebaseFirestore
 
-/// Firestore-backed repo for user appointments at:
-/// users/{uid}/appointments
-///
-/// Fields:
-/// - id: String (doc id)
-/// - title: String
-/// - type: String ("therapy", "doctor", "lab")
-/// - date: Timestamp
-/// - location: String?
-/// - notes: String?
-/// - createdAt / updatedAt: server timestamps
+/// Supabase-backed repo for user appointments from the `appointments` table.
 final class AppointmentsRepo: ObservableObject {
     @Published private(set) var items: [Appointment] = []
     @Published private(set) var isLoading: Bool = false
     @Published private(set) var errorMessage: String? = nil
 
-    private var listener: ListenerRegistration?
+    private var supabase: SupabaseManager { .shared }
 
-    deinit {
-        listener?.remove()
-    }
-
-    var isSignedIn: Bool { Auth.auth().currentUser != nil }
+    var isSignedIn: Bool { supabase.currentUserID != nil }
 
     func start() {
-        guard let uid = Auth.auth().currentUser?.uid else {
-            items = []
-            listener?.remove(); listener = nil
-            return
-        }
-        isLoading = true
-        errorMessage = nil
+        guard isSignedIn else { items = []; return }
+        Task { await fetchAppointments() }
+    }
 
-        let ref = Firestore.firestore()
-            .collection("users")
-            .document(uid)
-            .collection("appointments")
-            .order(by: "date")
-
-        listener?.remove()
-        listener = ref.addSnapshotListener { [weak self] snap, err in
-            guard let self else { return }
-            self.isLoading = false
-            if let err = err {
-                self.errorMessage = err.localizedDescription
-                return
-            }
-            let docs = snap?.documents ?? []
-            self.items = docs.compactMap { Appointment.from(doc: $0) }
+    @MainActor
+    func fetchAppointments() async {
+        guard let uid = supabase.currentUserID else { return }
+        isLoading = true; errorMessage = nil
+        do {
+            let rows: [AppointmentRow] = try await supabase.client
+                .from("appointments")
+                .select()
+                .eq("user_id", value: uid.uuidString)
+                .order("appointment_time")
+                .execute()
+                .value
+            self.items = rows.map { $0.toAppointment() }
+        } catch {
+            errorMessage = error.localizedDescription
         }
+        isLoading = false
     }
 
     func appointments(on date: Date) -> [Appointment] {
@@ -61,71 +41,82 @@ final class AppointmentsRepo: ObservableObject {
     }
 
     func add(title: String, type: AppointmentType, date: Date, location: String?, notes: String?, completion: ((Error?) -> Void)? = nil) {
-        guard let uid = Auth.auth().currentUser?.uid else {
+        guard let uid = supabase.currentUserID else {
             completion?(NSError(domain: "AppointmentsRepo", code: -1, userInfo: [NSLocalizedDescriptionKey: "Not signed in"]))
             return
         }
-        let ref = Firestore.firestore()
-            .collection("users")
-            .document(uid)
-            .collection("appointments")
-            .document()
-
-        let payload: [String: Any] = [
-            "title": title,
-            "type": type.rawValue,
-            "date": Timestamp(date: date),
-            "location": location ?? "",
-            "notes": notes ?? "",
-            "createdAt": FieldValue.serverTimestamp(),
-            "updatedAt": FieldValue.serverTimestamp()
-        ]
-
-        ref.setData(payload) { err in
-            completion?(err)
+        Task {
+            do {
+                let row: [String: String] = [
+                    "user_id": uid.uuidString,
+                    "title": title,
+                    "doctor_name": type.rawValue,
+                    "appointment_time": ISO8601DateFormatter().string(from: date),
+                    "notes": notes ?? ""
+                ]
+                try await supabase.client
+                    .from("appointments")
+                    .insert(row)
+                    .execute()
+                await fetchAppointments()
+                completion?(nil)
+            } catch {
+                completion?(error)
+            }
         }
     }
 
-    // MARK: - Update (for Edit)
     func update(id: String, title: String, type: AppointmentType, date: Date, location: String?, notes: String?, completion: ((Error?) -> Void)? = nil) {
-        guard let uid = Auth.auth().currentUser?.uid else {
-            completion?(NSError(domain: "AppointmentsRepo", code: -1, userInfo: [NSLocalizedDescriptionKey: "Not signed in"]))
-            return
-        }
-        let ref = Firestore.firestore()
-            .collection("users")
-            .document(uid)
-            .collection("appointments")
-            .document(id)
-
-        let payload: [String: Any] = [
-            "title": title,
-            "type": type.rawValue,
-            "date": Timestamp(date: date),
-            "location": location ?? "",
-            "notes": notes ?? "",
-            "updatedAt": FieldValue.serverTimestamp()
-        ]
-
-        ref.updateData(payload) { err in
-            completion?(err)
+        Task {
+            do {
+                let data: [String: String] = [
+                    "title": title,
+                    "doctor_name": type.rawValue,
+                    "appointment_time": ISO8601DateFormatter().string(from: date),
+                    "notes": notes ?? ""
+                ]
+                try await supabase.client
+                    .from("appointments")
+                    .update(data)
+                    .eq("id", value: id)
+                    .execute()
+                await fetchAppointments()
+                completion?(nil)
+            } catch {
+                completion?(error)
+            }
         }
     }
 
-    // MARK: - Delete
     @MainActor
     func delete(_ appointment: Appointment) async {
-        guard let uid = Auth.auth().currentUser?.uid else { return }
-        let ref = Firestore.firestore()
-            .collection("users")
-            .document(uid)
-            .collection("appointments")
-            .document(appointment.id)
         do {
-            try await ref.delete()
+            try await supabase.client
+                .from("appointments")
+                .delete()
+                .eq("id", value: appointment.id)
+                .execute()
+            await fetchAppointments()
         } catch {
-            await MainActor.run { self.errorMessage = error.localizedDescription }
+            self.errorMessage = error.localizedDescription
         }
+    }
+}
+
+// MARK: - DB Row Decodable
+
+private struct AppointmentRow: Decodable {
+    let id: String
+    let title: String
+    let doctor_name: String?
+    let appointment_time: String
+    let notes: String?
+
+    func toAppointment() -> Appointment {
+        let type = AppointmentType.fromString(doctor_name)
+        let date = ISO8601DateFormatter().date(from: appointment_time) ?? Date()
+        let n = (notes?.isEmpty == true) ? nil : notes
+        return Appointment(id: id, title: title, type: type, date: date, location: nil, notes: n)
     }
 }
 
@@ -160,25 +151,4 @@ struct Appointment: Identifiable, Equatable {
     let notes: String?
 
     var titleWithEmoji: String { "\(type.label) • \(title)" }
-
-    static func from(doc: QueryDocumentSnapshot) -> Appointment? {
-        let data = doc.data()
-        guard
-            let title = data["title"] as? String,
-            let ts = data["date"] as? Timestamp
-        else { return nil }
-
-        let type = AppointmentType.fromString(data["type"] as? String)
-        let location = (data["location"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        let notes = (data["notes"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-
-        return Appointment(
-            id: doc.documentID,
-            title: title,
-            type: type,
-            date: ts.dateValue(),
-            location: location,
-            notes: notes
-        )
-    }
 }

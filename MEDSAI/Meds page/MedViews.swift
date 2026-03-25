@@ -1,9 +1,7 @@
 import SwiftUI
 import PhotosUI
-import FirebaseAuth
-import FirebaseFirestore
 
-// MARK: - Firestore model (not SwiftData)
+// MARK: - Local model (Postgres-backed via Supabase)
 struct LocalMed: Identifiable, Hashable {
     let id: String
     var name: String
@@ -16,7 +14,7 @@ struct LocalMed: Identifiable, Hashable {
     var ingredients: [String]?
     var minIntervalHours: Int?
     var isArchived: Bool
-    var kbKey: String? // link to /medications/{key}
+    var kbKey: String?
 
     init(
         id: String = UUID().uuidString,
@@ -46,52 +44,44 @@ struct LocalMed: Identifiable, Hashable {
         self.kbKey = kbKey
     }
 
-    // Firestore ←→ Local
-    init?(docId: String, data: [String: Any]) {
-        guard
-            let name = data["name"] as? String,
-            let dosage = data["dosage"] as? String,
-            let frequencyPerDay = data["frequencyPerDay"] as? Int
-        else { return nil }
-
-        self.id = docId
-        self.name = name
-        self.dosage = dosage
-        self.frequencyPerDay = frequencyPerDay
-        self.startDate = (data["startDate"] as? Timestamp)?.dateValue() ?? Date()
-        self.endDate   = (data["endDate"]   as? Timestamp)?.dateValue() ?? Calendar.current.date(byAdding: .day, value: 14, to: Date())!
-
-        let frRaw = (data["foodRule"] as? String) ?? FoodRule.none.rawValue
-        self.foodRule = FoodRule(rawValue: frRaw) ?? .none
-
-        self.notes = data["notes"] as? String
-        self.ingredients = data["ingredients"] as? [String]
-        self.minIntervalHours = data["minIntervalHours"] as? Int
-        self.isArchived = data["isArchived"] as? Bool ?? false
-        self.kbKey = data["kbKey"] as? String
+    /// Decode from Supabase row
+    struct DBRow: Decodable {
+        let id: String
+        let dosage: String
+        let frequency_per_day: Int
+        let frequency_hours: Int?
+        let start_date: String?
+        let end_date: String?
+        let notes: String?
+        let is_active: Bool
+        let medication_id: String?
+        // Joined medication name
+        struct MedRef: Decodable { let name: String; let food_rule: String? }
+        let medications: MedRef?
     }
 
-    var asFirestore: [String: Any] {
-        var out: [String: Any] = [
-            "name": name,
-            "dosage": dosage,
-            "frequencyPerDay": frequencyPerDay,
-            "startDate": Timestamp(date: startDate),
-            "endDate": Timestamp(date: endDate),
-            "foodRule": foodRule.rawValue,
-            "isArchived": isArchived,
-            "updatedAt": FieldValue.serverTimestamp()
-        ]
-        if let n = notes, !n.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { out["notes"] = n }
-        if let ings = ingredients, !ings.isEmpty { out["ingredients"] = ings }
-        if let ih = minIntervalHours { out["minIntervalHours"] = ih }
-        if let kb = kbKey { out["kbKey"] = kb }
-        if out["createdAt"] == nil { out["createdAt"] = FieldValue.serverTimestamp() }
-        return out
+    init?(row: DBRow) {
+        self.id = row.id
+        self.dosage = row.dosage
+        self.frequencyPerDay = row.frequency_per_day
+        self.minIntervalHours = row.frequency_hours
+        self.notes = row.notes
+        self.isArchived = !row.is_active
+        self.name = row.medications?.name ?? "Unknown"
+        self.kbKey = row.medication_id
+
+        let df = ISO8601DateFormatter()
+        df.formatOptions = [.withFullDate]
+        self.startDate = df.date(from: row.start_date ?? "") ?? Date()
+        self.endDate = df.date(from: row.end_date ?? "") ?? Calendar.current.date(byAdding: .day, value: 14, to: Date())!
+
+        let frRaw = row.medications?.food_rule ?? FoodRule.none.rawValue
+        self.foodRule = FoodRule(rawValue: frRaw) ?? .none
+        self.ingredients = nil
     }
 }
 
-// MARK: - Repo (per-user, realtime)
+// MARK: - Repo (per-user, Supabase-backed)
 @MainActor
 final class UserMedsRepo: ObservableObject {
     @Published private(set) var meds: [LocalMed] = []
@@ -99,71 +89,129 @@ final class UserMedsRepo: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var isSignedIn = false
 
-    private var listener: ListenerRegistration?
-    deinit { listener?.remove() }
-
-    private var db: Firestore { Firestore.firestore() }
-
-    private func requireUID() throws -> String {
-        guard let uid = Auth.auth().currentUser?.uid else {
-            throw NSError(domain: "UserMedsRepo", code: 401, userInfo: [NSLocalizedDescriptionKey: "User is not signed in."])
-        }
-        return uid
-    }
-
-    private func col(_ uid: String) -> CollectionReference {
-        db.collection("users").document(uid).collection("medications")
-    }
+    private var supabase: SupabaseManager { .shared }
 
     func start() {
-        listener?.remove(); listener = nil
-        isSignedIn = (Auth.auth().currentUser != nil)
+        isSignedIn = supabase.currentUserID != nil
         guard isSignedIn else { meds = []; errorMessage = nil; return }
+        Task { await fetchMeds() }
+    }
 
+    func fetchMeds() async {
+        guard let uid = supabase.currentUserID else { return }
+        isLoading = true; errorMessage = nil
         do {
-            let uid = try requireUID()
-            isLoading = true; errorMessage = nil
-            listener = col(uid)
-                .order(by: "name", descending: false)
-                .addSnapshotListener { [weak self] snap, err in
-                    guard let self else { return }
-                    if let err = err {
-                        self.errorMessage = err.localizedDescription
-                        self.isLoading = false
-                        return
-                    }
-                    let docs = snap?.documents ?? []
-                    self.meds = docs.compactMap { LocalMed(docId: $0.documentID, data: $0.data()) }
-                    self.isLoading = false
-                }
+            let rows: [LocalMed.DBRow] = try await supabase.client
+                .from("user_medications")
+                .select("*, medications(name, food_rule)")
+                .eq("user_id", value: uid.uuidString)
+                .eq("is_active", value: true)
+                .execute()
+                .value
+            self.meds = rows.compactMap { LocalMed(row: $0) }
         } catch {
             errorMessage = error.localizedDescription
-            isLoading = false
+        }
+        isLoading = false
+    }
+
+    // MARK: - CRUD
+
+    func add(_ med: LocalMed) async {
+        guard let uid = supabase.currentUserID else { return }
+        do {
+            // Ensure the medication exists in the global catalog first
+            let medId = try await ensureMedicationExists(name: med.name, foodRule: med.foodRule)
+
+            let isoFmt = ISO8601DateFormatter()
+            isoFmt.formatOptions = [.withFullDate]
+
+            let row: [String: String] = [
+                "id": med.id,
+                "user_id": uid.uuidString,
+                "medication_id": medId,
+                "dosage": med.dosage,
+                "frequency_per_day": "\(med.frequencyPerDay)",
+                "frequency_hours": med.minIntervalHours.map { "\($0)" } ?? "",
+                "start_date": isoFmt.string(from: med.startDate),
+                "end_date": isoFmt.string(from: med.endDate),
+                "notes": med.notes ?? "",
+                "is_active": "true"
+            ]
+
+            try await supabase.client
+                .from("user_medications")
+                .upsert(row)
+                .execute()
+
+            await fetchMeds()
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
-    // CRUD
-    func add(_ med: LocalMed) async {
-        do {
-            let uid = try requireUID()
-            try await col(uid).document(med.id).setData(med.asFirestore, merge: true)
-        } catch { errorMessage = error.localizedDescription }
-    }
     func update(_ med: LocalMed) async { await add(med) }
+
     func delete(_ med: LocalMed) async {
         do {
-            let uid = try requireUID()
-            try await col(uid).document(med.id).delete()
-        } catch { errorMessage = error.localizedDescription }
+            try await supabase.client
+                .from("user_medications")
+                .delete()
+                .eq("id", value: med.id)
+                .execute()
+            await fetchMeds()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
+
     func setArchived(_ med: LocalMed, archived: Bool) async {
-        var copy = med; copy.isArchived = archived
-        await update(copy)
+        do {
+            try await supabase.client
+                .from("user_medications")
+                .update(["is_active": !archived ? "true" : "false"])
+                .eq("id", value: med.id)
+                .execute()
+            await fetchMeds()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    // MARK: - Helpers
+
+    /// Ensures a medication exists in the global `medications` table and returns its UUID.
+    private func ensureMedicationExists(name: String, foodRule: FoodRule) async throws -> String {
+        struct MedRow: Decodable { let id: String }
+
+        // Try to find existing
+        let existing: [MedRow] = try await supabase.client
+            .from("medications")
+            .select("id")
+            .eq("name", value: name)
+            .execute()
+            .value
+
+        if let first = existing.first { return first.id }
+
+        // Insert new
+        let newId = UUID().uuidString
+        try await supabase.client
+            .from("medications")
+            .insert([
+                "id": newId,
+                "name": name,
+                "food_rule": foodRule.rawValue
+            ])
+            .execute()
+
+        return newId
     }
 }
 
 // MARK: - Meds tab (per-user via Firestore)
 struct MedListView: View {
+    @EnvironmentObject var settings: AppSettings
     @StateObject private var repo = UserMedsRepo()
 
     @State private var showingAdd = false
@@ -218,18 +266,20 @@ struct MedListView: View {
             }
             .navigationTitle("Meds")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        Button { showingAdd = true } label: {
-                            HStack { Text("Add Manually"); Spacer(minLength: 8); menuIcon("square.and.pencil") }
-                        }
-                        Button { isPresentingPhotoPicker = true } label: {
-                            HStack { Text("Upload Med Picture"); Spacer(minLength: 8); menuIcon("photo.on.rectangle") }
-                        }
-                        Button { /* camera later */ } label: {
-                            HStack { Text("Take a Picture of the Med"); Spacer(minLength: 8); menuIcon("camera") }
-                        }
-                    } label: { Image(systemName: "plus.circle.fill") }
+                if settings.role != .patient {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Menu {
+                            Button { showingAdd = true } label: {
+                                HStack { Text("Add Manually"); Spacer(minLength: 8); menuIcon("square.and.pencil") }
+                            }
+                            Button { isPresentingPhotoPicker = true } label: {
+                                HStack { Text("Upload Med Picture"); Spacer(minLength: 8); menuIcon("photo.on.rectangle") }
+                            }
+                            Button { /* camera later */ } label: {
+                                HStack { Text("Take a Picture of the Med"); Spacer(minLength: 8); menuIcon("camera") }
+                            }
+                        } label: { Image(systemName: "plus.circle.fill") }
+                    }
                 }
             }
 
@@ -311,6 +361,7 @@ struct MedListView: View {
 
 // MARK: - Row extracted to avoid complex type-checking
 private struct MedRow: View {
+    @EnvironmentObject var settings: AppSettings
     let med: LocalMed
     let onEdit: () -> Void
     let onInfo: () -> Void
@@ -325,11 +376,16 @@ private struct MedRow: View {
             }
             Spacer(minLength: 8)
             Menu {
-                Button(action: onEdit) { Label("Edit", systemImage: "pencil") }
+                if settings.role != .patient {
+                    Button(action: onEdit) { Label("Edit", systemImage: "pencil") }
+                }
                 Button(action: onInfo) { Label("More information", systemImage: "info.circle") }
-                Divider()
-                Button(role: .destructive, action: onDelete) {
-                    Label("Delete", systemImage: "trash")
+                
+                if settings.role != .patient {
+                    Divider()
+                    Button(role: .destructive, action: onDelete) {
+                        Label("Delete", systemImage: "trash")
+                    }
                 }
             } label: {
                 Image(systemName: "ellipsis.circle")
@@ -692,14 +748,40 @@ struct MedDetailView: View {
     }
 
     private func loadFromCatalog(nameOrKey: String) async -> DrugPayload? {
-        let key = normalizeKey(nameOrKey)
-        let col = Firestore.firestore().collection("medications")
+        // Try to load from the Postgres medications table
+        struct CatalogRow: Decodable {
+            let name: String
+            let how_to_use: String?
+            let side_effects: [String]?
+            let contraindications: [String]?
+            let food_rule: String?
+            let min_interval_hours: Int?
+            let active_ingredients: [String]?
+        }
         do {
-            let snap = try await col.document(key).getDocument()
-            guard let data = snap.data(), let payloadMap = data["payload"] as? [String: Any] else { return nil }
-            let json = try JSONSerialization.data(withJSONObject: payloadMap)
-            let p = try JSONDecoder().decode(DrugPayload.self, from: json)
-            return p
+            let rows: [CatalogRow] = try await SupabaseManager.shared.client
+                .from("medications")
+                .select()
+                .eq("name", value: nameOrKey)
+                .limit(1)
+                .execute()
+                .value
+            guard let row = rows.first else { return nil }
+            return DrugPayload(
+                title: row.name,
+                strengths: [],
+                dosageForms: [],
+                foodRule: row.food_rule,
+                minIntervalHours: row.min_interval_hours,
+                ingredients: row.active_ingredients ?? [],
+                indications: [],
+                howToTake: row.how_to_use.map { [$0] } ?? [],
+                commonSideEffects: row.side_effects ?? [],
+                importantWarnings: [],
+                interactionsToAvoid: row.contraindications ?? [],
+                references: nil,
+                kbKey: nil
+            )
         } catch { return nil }
     }
 

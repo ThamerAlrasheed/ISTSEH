@@ -5,6 +5,7 @@ struct SignUpPageView: View {
     // Flow steps
     enum Step: Int { case account = 0, identity = 1, health = 2 }
 
+    @EnvironmentObject var settings: AppSettings
     @Environment(\.dismiss) private var dismiss
     @State private var step: Step = .account
 
@@ -278,8 +279,12 @@ struct SignUpPageView: View {
                 .upsert(profile)
                 .execute()
 
-            // 4) Done
-            dismiss()
+            // 4) Update app state so RootView transitions to the main app
+            await MainActor.run {
+                settings.didChooseEntry = true
+                settings.onboardingCompleted = true
+            }
+            await settings.loadRoutineFromSupabase()
         } catch {
             errorText = "Couldn't create account: \(error.localizedDescription)"
         }

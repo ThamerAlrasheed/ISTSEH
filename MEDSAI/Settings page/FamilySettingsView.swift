@@ -205,7 +205,12 @@ struct AddFamilyMemberView: View {
     }
     
     private func generateCode() async {
-        guard let caregiverId = supabase.currentUserID else { return }
+        guard let caregiverId = supabase.currentUserID else {
+            await MainActor.run {
+                errorText = "You must be signed in to create a family member profile."
+            }
+            return
+        }
         isSaving = true
         errorText = nil
         defer { isSaving = false }

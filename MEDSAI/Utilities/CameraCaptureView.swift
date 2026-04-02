@@ -70,9 +70,9 @@ final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     @Published var showError = false
     @Published var errorMessage: String? = nil
 
-    let session = AVCaptureSession()
+    nonisolated let session = AVCaptureSession()
     private let sessionQueue = DispatchQueue(label: "CameraSessionQueue", qos: .userInitiated)
-    private let photoOutput = AVCapturePhotoOutput()
+    nonisolated private let photoOutput = AVCapturePhotoOutput()
 
     // MARK: Start / Stop
 
@@ -226,17 +226,22 @@ struct CameraPreview: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: PreviewView, context: Context) {
+        let layer = uiView.videoPreviewLayer
+        guard let connection = layer.connection else { return }
+
         if #available(iOS 17.0, *) {
-            uiView.videoPreviewLayer.connection?.videoRotationAngle = uiRotationAngle()
+            connection.videoRotationAngle = uiRotationAngle()
         } else {
-            uiView.videoPreviewLayer.connection?.videoOrientation = uiOrientation()
+            connection.videoOrientation = uiOrientation()
         }
     }
 
     private func uiRotationAngle() -> CGFloat {
-        switch UIApplication.shared.connectedScenes
+        let orientation = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
-            .first?.interfaceOrientation {
+            .first?.interfaceOrientation ?? .portrait
+        
+        switch orientation {
         case .landscapeLeft: return 180
         case .landscapeRight: return 0
         case .portraitUpsideDown: return 270
@@ -244,10 +249,13 @@ struct CameraPreview: UIViewRepresentable {
         }
     }
 
+    @available(iOS, deprecated: 17.0, message: "Use videoRotationAngle instead")
     private func uiOrientation() -> AVCaptureVideoOrientation {
-        switch UIApplication.shared.connectedScenes
+        let orientation = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
-            .first?.interfaceOrientation {
+            .first?.interfaceOrientation ?? .portrait
+        
+        switch orientation {
         case .landscapeLeft: return .landscapeLeft
         case .landscapeRight: return .landscapeRight
         case .portraitUpsideDown: return .portraitUpsideDown

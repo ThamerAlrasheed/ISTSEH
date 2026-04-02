@@ -68,6 +68,12 @@ struct PatientSettingsView: View {
         settings.didChooseEntry = false
         
         // Any other cleanup
-        SupabaseManager.shared.client.auth.signOut()
+        Task {
+            do {
+                try await SupabaseManager.shared.client.auth.signOut()
+            } catch {
+                print("⚠️ Sign out failed:", error.localizedDescription)
+            }
+        }
     }
 }

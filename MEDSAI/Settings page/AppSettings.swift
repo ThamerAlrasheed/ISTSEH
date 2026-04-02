@@ -128,26 +128,28 @@ final class AppSettings: ObservableObject {
                 let breakfast_time: String?
                 let lunch_time: String?
                 let dinner_time: String?
-                let bed_time: String?
+                let bedtime: String?
                 let wakeup_time: String?
                 let first_name: String?
                 let last_name: String?
                 let role: String?
             }
 
-            let row: UserRow = try await supabase.client
+            let rows: [UserRow] = try await supabase.client
                 .from("users")
-                .select("breakfast_time, lunch_time, dinner_time, bed_time, wakeup_time, first_name, last_name, role")
+                .select("breakfast_time, lunch_time, dinner_time, bedtime, wakeup_time, first_name, last_name, role")
                 .eq("id", value: uid.uuidString)
-                .single()
+                .limit(1)
                 .execute()
                 .value
+
+            guard let row = rows.first else { return }
 
             isApplyingRemote = true
             breakfast = parseTime(row.breakfast_time, defaultHour: 8)
             lunch     = parseTime(row.lunch_time,     defaultHour: 13)
             dinner    = parseTime(row.dinner_time,     defaultHour: 19)
-            bedtime   = parseTime(row.bed_time,        defaultHour: 23)
+            bedtime   = parseTime(row.bedtime,         defaultHour: 23)
             wakeup    = parseTime(row.wakeup_time,     defaultHour: 7)
 
             if let fn = row.first_name { firstName = fn }
@@ -169,7 +171,7 @@ final class AppSettings: ObservableObject {
             "breakfast_time": formatTime(breakfast, defaultHour: 8),
             "lunch_time":     formatTime(lunch,     defaultHour: 13),
             "dinner_time":    formatTime(dinner,    defaultHour: 19),
-            "bed_time":       formatTime(bedtime,   defaultHour: 23),
+            "bedtime":        formatTime(bedtime,   defaultHour: 23),
             "wakeup_time":    formatTime(wakeup,    defaultHour: 7)
         ]
 

@@ -1,4 +1,5 @@
 import SwiftUI
+import Supabase
 
 struct FamilySettingsView: View {
     @EnvironmentObject var settings: AppSettings
@@ -108,6 +109,7 @@ struct FamilySettingsView: View {
 
 struct AddFamilyMemberView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var settings: AppSettings
     @State private var firstName = ""
     @State private var lastName = ""
     @State private var dob = Date()
@@ -205,9 +207,9 @@ struct AddFamilyMemberView: View {
     }
     
     private func generateCode() async {
-        guard let caregiverId = supabase.currentUserID else {
+        guard supabase.client.auth.currentSession?.user.id != nil else {
             await MainActor.run {
-                errorText = "You must be signed in to create a family member profile."
+                errorText = "You must be signed in with a caregiver account to create a family member."
             }
             return
         }
@@ -216,50 +218,32 @@ struct AddFamilyMemberView: View {
         defer { isSaving = false }
 
         do {
-            let isoFmt = ISO8601DateFormatter()
-            isoFmt.formatOptions = [.withFullDate]
-
-            // 1) Create a patient user row (no email/password)
-            let patientId = UUID()
-            let patientRow: [String: AnyJSON] = [
-                "id": .string(patientId.uuidString),
-                "role": .string("patient"),
-                "first_name": .string(firstName.trimmingCharacters(in: .whitespaces)),
-                "last_name": .string(lastName.trimmingCharacters(in: .whitespaces)),
-                "date_of_birth": .string(isoFmt.string(from: dob)),
-                "allergies": .array(allergies.map { .string($0) }),
-                "conditions": .array(conditions.map { .string($0) })
-            ]
-            try await supabase.client.from("users").insert(patientRow).execute()
-
-            // 2) Create the caregiver ↔ patient link
-            try await supabase.client.from("caregiver_relations").insert([
-                "caregiver_id": .string(caregiverId.uuidString),
-                "patient_id": .string(patientId.uuidString)
-            ]).execute()
-
-            // 3) Generate a 6-digit code
-            let code = String(format: "%06d", Int.random(in: 100000...999999))
-            let expiry = Calendar.current.date(byAdding: .hour, value: 72, to: Date())!
-
-            try await supabase.client.from("care_codes").insert([
-                "code": .string(code),
-                "patient_id": .string(patientId.uuidString),
-                "caregiver_id": .string(caregiverId.uuidString),
-                "status": .string("active"),
-                "expires_at": .string(ISO8601DateFormatter().string(from: expiry))
-            ]).execute()
+            let response = try await supabase.createFamilyMember(
+                firstName: firstName,
+                lastName: lastName,
+                dateOfBirth: dob,
+                allergies: allergies,
+                conditions: conditions
+            )
 
             await MainActor.run {
-                self.generatedCode = code
+                settings.role = .caregiver
+                self.generatedCode = response.code
                 onSave(firstName)
             }
         } catch {
             await MainActor.run {
-                errorText = "Failed to create profile: \(error.localizedDescription)"
+                errorText = friendlyErrorMessage(for: error)
             }
-            print("⚠️ generateCode failed:", error.localizedDescription)
         }
+    }
+
+    private func friendlyErrorMessage(for error: Error) -> String {
+        let message = error.localizedDescription.lowercased()
+        if message.contains("non-2xx status code: 404") || message.contains("function") && message.contains("not found") {
+            return "The family-member backend function is not deployed yet."
+        }
+        return error.localizedDescription
     }
     
     private func formatCode(_ code: String) -> String {

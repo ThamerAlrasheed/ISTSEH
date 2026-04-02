@@ -2,6 +2,17 @@ import SwiftUI
 import Supabase
 
 struct SignUpPageView: View {
+    private struct UserProfileUpsertPayload: Encodable {
+        let id: String
+        let email: String
+        let first_name: String
+        let last_name: String
+        let phone_number: String
+        let date_of_birth: String
+        let allergies: [String]
+        let conditions: [String]
+    }
+
     // Flow steps
     enum Step: Int { case account = 0, identity = 1, health = 2 }
 
@@ -263,16 +274,16 @@ struct SignUpPageView: View {
             let isoFormatter = ISO8601DateFormatter()
             isoFormatter.formatOptions = [.withFullDate]
 
-            let profile: [String: AnyJSON] = [
-                "id": .string(userId.uuidString),
-                "email": .string(trimmedEmail),
-                "first_name": .string(firstName.trimmingCharacters(in: .whitespacesAndNewlines)),
-                "last_name": .string(lastName.trimmingCharacters(in: .whitespacesAndNewlines)),
-                "phone_number": .string(phoneNumber.trimmingCharacters(in: .whitespacesAndNewlines)),
-                "date_of_birth": .string(isoFormatter.string(from: dateOfBirth)),
-                "allergies": .array(allergyList.map { .string($0) }),
-                "conditions": .array(conditionList.map { .string($0) })
-            ]
+            let profile = UserProfileUpsertPayload(
+                id: userId.uuidString,
+                email: trimmedEmail,
+                first_name: firstName.trimmingCharacters(in: .whitespacesAndNewlines),
+                last_name: lastName.trimmingCharacters(in: .whitespacesAndNewlines),
+                phone_number: phoneNumber.trimmingCharacters(in: .whitespacesAndNewlines),
+                date_of_birth: isoFormatter.string(from: dateOfBirth),
+                allergies: allergyList,
+                conditions: conditionList
+            )
 
             try await supabase.client
                 .from("users")

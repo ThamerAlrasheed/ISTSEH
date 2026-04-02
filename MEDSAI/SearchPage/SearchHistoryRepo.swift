@@ -2,6 +2,11 @@ import Foundation
 
 @MainActor
 final class SearchHistoryRepo: ObservableObject {
+    private struct SearchHistoryInsertPayload: Encodable {
+        let user_id: String
+        let search_query: String
+    }
+
     @Published private(set) var recent: [String] = []
     @Published private(set) var errorMessage: String?
 
@@ -47,10 +52,12 @@ final class SearchHistoryRepo: ObservableObject {
         do {
             try await supabase.client
                 .from("search_history")
-                .insert([
-                    "user_id": uid.uuidString,
-                    "search_query": q
-                ])
+                .insert(
+                    SearchHistoryInsertPayload(
+                        user_id: uid.uuidString,
+                        search_query: q
+                    )
+                )
                 .execute()
         } catch {
             errorMessage = error.localizedDescription

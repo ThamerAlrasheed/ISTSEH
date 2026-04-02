@@ -84,6 +84,29 @@ struct LocalMed: Identifiable, Hashable {
 // MARK: - Repo (per-user, Supabase-backed)
 @MainActor
 final class UserMedsRepo: ObservableObject {
+    private struct UserMedicationUpsertPayload: Encodable {
+        let id: String
+        let user_id: String
+        let medication_id: String
+        let dosage: String
+        let frequency_per_day: Int
+        let frequency_hours: Int?
+        let start_date: String
+        let end_date: String
+        let notes: String?
+        let is_active: Bool
+    }
+
+    private struct ArchivePayload: Encodable {
+        let is_active: Bool
+    }
+
+    private struct MedicationInsertPayload: Encodable {
+        let id: String
+        let name: String
+        let food_rule: String
+    }
+
     @Published private(set) var meds: [LocalMed] = []
     @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String?
@@ -126,18 +149,18 @@ final class UserMedsRepo: ObservableObject {
             let isoFmt = ISO8601DateFormatter()
             isoFmt.formatOptions = [.withFullDate]
 
-            let row: [String: String] = [
-                "id": med.id,
-                "user_id": uid.uuidString,
-                "medication_id": medId,
-                "dosage": med.dosage,
-                "frequency_per_day": "\(med.frequencyPerDay)",
-                "frequency_hours": med.minIntervalHours.map { "\($0)" } ?? "",
-                "start_date": isoFmt.string(from: med.startDate),
-                "end_date": isoFmt.string(from: med.endDate),
-                "notes": med.notes ?? "",
-                "is_active": "true"
-            ]
+            let row = UserMedicationUpsertPayload(
+                id: med.id,
+                user_id: uid.uuidString,
+                medication_id: medId,
+                dosage: med.dosage,
+                frequency_per_day: med.frequencyPerDay,
+                frequency_hours: med.minIntervalHours,
+                start_date: isoFmt.string(from: med.startDate),
+                end_date: isoFmt.string(from: med.endDate),
+                notes: normalizedNotes(med.notes),
+                is_active: true
+            )
 
             try await supabase.client
                 .from("user_medications")
@@ -169,7 +192,7 @@ final class UserMedsRepo: ObservableObject {
         do {
             try await supabase.client
                 .from("user_medications")
-                .update(["is_active": !archived ? "true" : "false"])
+                .update(ArchivePayload(is_active: !archived))
                 .eq("id", value: med.id)
                 .execute()
             await fetchMeds()
@@ -198,14 +221,22 @@ final class UserMedsRepo: ObservableObject {
         let newId = UUID().uuidString
         try await supabase.client
             .from("medications")
-            .insert([
-                "id": newId,
-                "name": name,
-                "food_rule": foodRule.rawValue
-            ])
+            .insert(
+                MedicationInsertPayload(
+                    id: newId,
+                    name: name,
+                    food_rule: foodRule.rawValue
+                )
+            )
             .execute()
 
         return newId
+    }
+
+    private func normalizedNotes(_ notes: String?) -> String? {
+        guard let notes else { return nil }
+        let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

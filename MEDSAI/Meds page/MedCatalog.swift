@@ -25,6 +25,13 @@ struct MedCatalogEntry: Codable, Identifiable {
 
 // MARK: - Repo for global medications catalog (Supabase-backed)
 final class MedCatalogRepo {
+    private struct MedicationInsertPayload: Encodable {
+        let name: String
+        let how_to_use: String?
+        let food_rule: String
+        let min_interval_hours: Int?
+    }
+
     static let shared = MedCatalogRepo()
     private init() {}
 
@@ -98,17 +105,21 @@ final class MedCatalogRepo {
             .value
 
         if existing.isEmpty {
-            // Insert new medication into the global catalog
-            let newRow: [String: String] = [
-                "name": display,
-                "how_to_use": payload.howToTake.joined(separator: "\n"),
-                "food_rule": payload.foodRule ?? "none",
-                "min_interval_hours": payload.minIntervalHours.map { "\($0)" } ?? ""
-            ]
+            let instructions = payload.howToTake
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
 
             try await supabase.client
                 .from("medications")
-                .insert(newRow)
+                .insert(
+                    MedicationInsertPayload(
+                        name: display,
+                        how_to_use: instructions.isEmpty ? nil : instructions,
+                        food_rule: payload.foodRule ?? "none",
+                        min_interval_hours: payload.minIntervalHours
+                    )
+                )
                 .execute()
         }
 

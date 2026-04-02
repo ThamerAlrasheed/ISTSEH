@@ -1,6 +1,4 @@
 import SwiftUI
-import Supabase
-
 struct CareCodeEntryView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var settings: AppSettings
@@ -29,24 +27,27 @@ struct CareCodeEntryView: View {
             }
             .padding(.top, 60)
             
-            // Large spaced character input
-            HStack(spacing: 12) {
-                ForEach(0..<6, id: \.self) { index in
-                    CharacterBox(char: character(at: index))
+            // Keep the actual TextField alive in layout to avoid keyboard-session glitches.
+            ZStack {
+                HStack(spacing: 12) {
+                    ForEach(0..<6, id: \.self) { index in
+                        CharacterBox(char: character(at: index))
+                    }
                 }
-            }
-            .background(
+
                 TextField("", text: $code)
                     .keyboardType(.numberPad)
                     .textContentType(.oneTimeCode)
                     .focused($isTextFieldFocused)
-                    .opacity(0)
+                    .frame(width: 1, height: 1)
+                    .opacity(0.01)
                     .onChange(of: code) { _, newValue in
                         if newValue.count > 6 {
                             code = String(newValue.prefix(6))
                         }
                     }
-            )
+            }
+            .contentShape(Rectangle())
             .onTapGesture {
                 isTextFieldFocused = true
             }
@@ -79,7 +80,9 @@ struct CareCodeEntryView: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            isTextFieldFocused = true
+            DispatchQueue.main.async {
+                isTextFieldFocused = true
+            }
         }
     }
     
@@ -97,65 +100,11 @@ struct CareCodeEntryView: View {
         
         Task {
             do {
-                // 1. Look up the care code in Postgres
-                struct CodeRow: Decodable {
-                    let id: String
-                    let patient_id: String
-                    let caregiver_id: String
-                    let status: String
-                    let expires_at: String
-                }
-                
-                let rows: [CodeRow] = try await SupabaseManager.shared.client
-                    .from("care_codes")
-                    .select()
-                    .eq("code", value: code)
-                    .eq("status", value: "active")
-                    .execute()
-                    .value
-                
-                guard let codeRow = rows.first else {
-                    await MainActor.run {
-                        isLoading = false
-                        errorMessage = "Invalid code. Please check with your caregiver."
-                        self.code = ""
-                    }
-                    return
-                }
-                
-                // 2. Check expiry
-                let expiry = ISO8601DateFormatter().date(from: codeRow.expires_at) ?? Date.distantPast
-                guard expiry > Date() else {
-                    await MainActor.run {
-                        isLoading = false
-                        errorMessage = "This code has expired. Ask your caregiver for a new one."
-                        self.code = ""
-                    }
-                    return
-                }
-                
-                // 3. Mark the code as used
-                try await SupabaseManager.shared.client
-                    .from("care_codes")
-                    .update(["status": "used"])
-                    .eq("id", value: codeRow.id)
-                    .execute()
-                
-                // 4. Create a device session for the patient
-                let deviceToken = UUID().uuidString
-                try await SupabaseManager.shared.client
-                    .from("device_sessions")
-                    .insert([
-                        "user_id": codeRow.patient_id,
-                        "device_token": deviceToken
-                    ])
-                    .execute()
-                
-                // 5. Store device token locally for persistent login
-                UserDefaults.standard.set(deviceToken, forKey: "deviceToken")
-                UserDefaults.standard.set(codeRow.patient_id, forKey: "patientUserId")
-                
-                // 6. Success — switch the app to patient mode
+                let result = try await SupabaseManager.shared.redeemCareCode(code)
+
+                UserDefaults.standard.set(result.deviceToken, forKey: "deviceToken")
+                UserDefaults.standard.set(result.patientID, forKey: "patientUserId")
+
                 await MainActor.run {
                     isLoading = false
                     settings.role = .patient
@@ -166,7 +115,7 @@ struct CareCodeEntryView: View {
             } catch {
                 await MainActor.run {
                     isLoading = false
-                    errorMessage = "Something went wrong: \(error.localizedDescription)"
+                    errorMessage = error.localizedDescription
                     self.code = ""
                 }
             }

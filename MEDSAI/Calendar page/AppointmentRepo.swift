@@ -3,6 +3,21 @@ import Combine
 
 /// Supabase-backed repo for user appointments from the `appointments` table.
 final class AppointmentsRepo: ObservableObject {
+    private struct AppointmentInsertPayload: Encodable {
+        let user_id: String
+        let title: String
+        let doctor_name: String
+        let appointment_time: String
+        let notes: String?
+    }
+
+    private struct AppointmentUpdatePayload: Encodable {
+        let title: String
+        let doctor_name: String
+        let appointment_time: String
+        let notes: String?
+    }
+
     @Published private(set) var items: [Appointment] = []
     @Published private(set) var isLoading: Bool = false
     @Published private(set) var errorMessage: String? = nil
@@ -47,13 +62,13 @@ final class AppointmentsRepo: ObservableObject {
         }
         Task {
             do {
-                let row: [String: String] = [
-                    "user_id": uid.uuidString,
-                    "title": title,
-                    "doctor_name": type.rawValue,
-                    "appointment_time": ISO8601DateFormatter().string(from: date),
-                    "notes": notes ?? ""
-                ]
+                let row = AppointmentInsertPayload(
+                    user_id: uid.uuidString,
+                    title: title,
+                    doctor_name: type.rawValue,
+                    appointment_time: ISO8601DateFormatter().string(from: date),
+                    notes: normalizedNotes(notes)
+                )
                 try await supabase.client
                     .from("appointments")
                     .insert(row)
@@ -69,12 +84,12 @@ final class AppointmentsRepo: ObservableObject {
     func update(id: String, title: String, type: AppointmentType, date: Date, location: String?, notes: String?, completion: ((Error?) -> Void)? = nil) {
         Task {
             do {
-                let data: [String: String] = [
-                    "title": title,
-                    "doctor_name": type.rawValue,
-                    "appointment_time": ISO8601DateFormatter().string(from: date),
-                    "notes": notes ?? ""
-                ]
+                let data = AppointmentUpdatePayload(
+                    title: title,
+                    doctor_name: type.rawValue,
+                    appointment_time: ISO8601DateFormatter().string(from: date),
+                    notes: normalizedNotes(notes)
+                )
                 try await supabase.client
                     .from("appointments")
                     .update(data)
@@ -100,6 +115,12 @@ final class AppointmentsRepo: ObservableObject {
         } catch {
             self.errorMessage = error.localizedDescription
         }
+    }
+
+    private func normalizedNotes(_ notes: String?) -> String? {
+        guard let notes else { return nil }
+        let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

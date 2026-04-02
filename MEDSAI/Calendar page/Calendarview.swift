@@ -106,7 +106,7 @@ private struct WeeklyCalendar: View {
             .frame(maxWidth: .infinity)
         }
         .padding(.horizontal)
-        .onChange(of: selection) { newValue in
+        .onChange(of: selection) { _, newValue in
             // If binding is changed externally, keep calendar in view
             let start = calendar.startOfWeek(for: newValue)
             if !calendar.isDate(start, inSameDayAs: referenceWeekStart) {
@@ -194,7 +194,7 @@ private struct MonthlyCalendar: View {
             .frame(maxWidth: .infinity)
         }
         .padding(.horizontal)
-        .onChange(of: selection) { newValue in
+        .onChange(of: selection) { _, newValue in
             // Keep month in view if external selection jumps elsewhere
             let monthStart = calendar.firstOfMonth(for: newValue)
             if !calendar.isDate(monthStart, inSameDayAs: visibleMonthAnchor) {

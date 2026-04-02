@@ -100,16 +100,16 @@ struct CareCodeEntryView: View {
         
         Task {
             do {
-                let result = try await SupabaseManager.shared.redeemCareCode(code)
-
-                UserDefaults.standard.set(result.deviceToken, forKey: "deviceToken")
-                UserDefaults.standard.set(result.patientID, forKey: "patientUserId")
+                _ = try await FamilyRepository.shared.redeemCareCode(code)
 
                 await MainActor.run {
-                    isLoading = false
                     settings.role = .patient
                     settings.onboardingCompleted = true
                     settings.didChooseEntry = true
+                }
+                await settings.loadRoutineFromBackend()
+                await MainActor.run {
+                    isLoading = false
                     dismiss()
                 }
             } catch {

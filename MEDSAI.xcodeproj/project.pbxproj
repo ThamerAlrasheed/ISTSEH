@@ -7,18 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		04272B972F74065000CDF2D0 /* Auth in Frameworks */ = {isa = PBXBuildFile; productRef = 04272B962F74065000CDF2D0 /* Auth */; };
-		04272B992F74065000CDF2D0 /* Functions in Frameworks */ = {isa = PBXBuildFile; productRef = 04272B982F74065000CDF2D0 /* Functions */; };
-		04272B9B2F74065000CDF2D0 /* PostgREST in Frameworks */ = {isa = PBXBuildFile; productRef = 04272B9A2F74065000CDF2D0 /* PostgREST */; };
-		04272B9D2F74065000CDF2D0 /* Realtime in Frameworks */ = {isa = PBXBuildFile; productRef = 04272B9C2F74065000CDF2D0 /* Realtime */; };
-		04272B9F2F74065000CDF2D0 /* Storage in Frameworks */ = {isa = PBXBuildFile; productRef = 04272B9E2F74065000CDF2D0 /* Storage */; };
-		04272BA12F74065000CDF2D0 /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 04272BA02F74065000CDF2D0 /* Supabase */; };
-		04AC77472E852809008FE15B /* FirebaseAppCheck in Frameworks */ = {isa = PBXBuildFile; productRef = 04AC77462E852809008FE15B /* FirebaseAppCheck */; };
-		04AC77492E852809008FE15B /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 04AC77482E852809008FE15B /* FirebaseAuth */; };
-		04AC774B2E852809008FE15B /* FirebaseDatabase in Frameworks */ = {isa = PBXBuildFile; productRef = 04AC774A2E852809008FE15B /* FirebaseDatabase */; };
-		04AC774D2E852809008FE15B /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 04AC774C2E852809008FE15B /* FirebaseFirestore */; };
-		04AC774F2E852809008FE15B /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 04AC774E2E852809008FE15B /* FirebaseStorage */; };
-		04AC77522E852820008FE15B /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 04AC77512E852820008FE15B /* GoogleSignInSwift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -70,18 +58,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				04AC774B2E852809008FE15B /* FirebaseDatabase in Frameworks */,
-				04AC774D2E852809008FE15B /* FirebaseFirestore in Frameworks */,
-				04272B9F2F74065000CDF2D0 /* Storage in Frameworks */,
-				04272B992F74065000CDF2D0 /* Functions in Frameworks */,
-				04272B9D2F74065000CDF2D0 /* Realtime in Frameworks */,
-				04272B9B2F74065000CDF2D0 /* PostgREST in Frameworks */,
-				04AC77472E852809008FE15B /* FirebaseAppCheck in Frameworks */,
-				04272B972F74065000CDF2D0 /* Auth in Frameworks */,
-				04272BA12F74065000CDF2D0 /* Supabase in Frameworks */,
-				04AC77522E852820008FE15B /* GoogleSignInSwift in Frameworks */,
-				04AC774F2E852809008FE15B /* FirebaseStorage in Frameworks */,
-				04AC77492E852809008FE15B /* FirebaseAuth in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -148,19 +124,7 @@
 			);
 			name = MEDSAI;
 			packageProductDependencies = (
-				04AC77462E852809008FE15B /* FirebaseAppCheck */,
-				04AC77482E852809008FE15B /* FirebaseAuth */,
-				04AC774A2E852809008FE15B /* FirebaseDatabase */,
-				04AC774C2E852809008FE15B /* FirebaseFirestore */,
-				04AC774E2E852809008FE15B /* FirebaseStorage */,
-				04AC77512E852820008FE15B /* GoogleSignInSwift */,
-				04272B962F74065000CDF2D0 /* Auth */,
-				04272B982F74065000CDF2D0 /* Functions */,
-				04272B9A2F74065000CDF2D0 /* PostgREST */,
-				04272B9C2F74065000CDF2D0 /* Realtime */,
-				04272B9E2F74065000CDF2D0 /* Storage */,
-				04272BA02F74065000CDF2D0 /* Supabase */,
-			);
+				);
 			productName = MEDSAI;
 			productReference = 040BD0D22E4F8D9500E44F60 /* MEDSAI.app */;
 			productType = "com.apple.product-type.application";
@@ -239,9 +203,6 @@
 			mainGroup = 040BD0C92E4F8D9500E44F60;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				04AC77452E852809008FE15B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
-				04AC77502E852820008FE15B /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
-				04272B952F74065000CDF2D0 /* XCRemoteSwiftPackageReference "supabase-swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 040BD0D32E4F8D9500E44F60 /* Products */;
@@ -621,94 +582,10 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		04272B952F74065000CDF2D0 /* XCRemoteSwiftPackageReference "supabase-swift" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/supabase-community/supabase-swift";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.5.1;
-			};
-		};
-		04AC77452E852809008FE15B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 12.3.0;
-			};
-		};
-		04AC77502E852820008FE15B /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/google/GoogleSignIn-iOS";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 9.0.0;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
+	/* End XCRemoteSwiftPackageReference section */
 
-/* Begin XCSwiftPackageProductDependency section */
-		04272B962F74065000CDF2D0 /* Auth */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 04272B952F74065000CDF2D0 /* XCRemoteSwiftPackageReference "supabase-swift" */;
-			productName = Auth;
-		};
-		04272B982F74065000CDF2D0 /* Functions */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 04272B952F74065000CDF2D0 /* XCRemoteSwiftPackageReference "supabase-swift" */;
-			productName = Functions;
-		};
-		04272B9A2F74065000CDF2D0 /* PostgREST */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 04272B952F74065000CDF2D0 /* XCRemoteSwiftPackageReference "supabase-swift" */;
-			productName = PostgREST;
-		};
-		04272B9C2F74065000CDF2D0 /* Realtime */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 04272B952F74065000CDF2D0 /* XCRemoteSwiftPackageReference "supabase-swift" */;
-			productName = Realtime;
-		};
-		04272B9E2F74065000CDF2D0 /* Storage */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 04272B952F74065000CDF2D0 /* XCRemoteSwiftPackageReference "supabase-swift" */;
-			productName = Storage;
-		};
-		04272BA02F74065000CDF2D0 /* Supabase */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 04272B952F74065000CDF2D0 /* XCRemoteSwiftPackageReference "supabase-swift" */;
-			productName = Supabase;
-		};
-		04AC77462E852809008FE15B /* FirebaseAppCheck */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 04AC77452E852809008FE15B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseAppCheck;
-		};
-		04AC77482E852809008FE15B /* FirebaseAuth */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 04AC77452E852809008FE15B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseAuth;
-		};
-		04AC774A2E852809008FE15B /* FirebaseDatabase */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 04AC77452E852809008FE15B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseDatabase;
-		};
-		04AC774C2E852809008FE15B /* FirebaseFirestore */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 04AC77452E852809008FE15B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseFirestore;
-		};
-		04AC774E2E852809008FE15B /* FirebaseStorage */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 04AC77452E852809008FE15B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseStorage;
-		};
-		04AC77512E852820008FE15B /* GoogleSignInSwift */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 04AC77502E852820008FE15B /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
-			productName = GoogleSignInSwift;
-		};
-/* End XCSwiftPackageProductDependency section */
+	/* Begin XCSwiftPackageProductDependency section */
+	/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 040BD0CA2E4F8D9500E44F60 /* Project object */;
 }

@@ -1,0 +1,36 @@
+[project]
+name = "medsai-backend"
+version = "0.1.0"
+description = "FastAPI backend replacing Supabase/Firebase services for MEDSAI."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.14.0",
+    "asyncpg>=0.30.0",
+    "email-validator>=2.2.0",
+    "fastapi>=0.115.0",
+    "httpx>=0.28.0",
+    "openai>=1.75.0",
+    "passlib[bcrypt]>=1.7.4",
+    "pydantic-settings>=2.8.0",
+    "pyjwt>=2.10.0",
+    "sqlalchemy[asyncio]>=2.0.38",
+    "uvicorn[standard]>=0.34.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.25.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.uv]
+package = false

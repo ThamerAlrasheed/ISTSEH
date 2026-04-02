@@ -6,6 +6,7 @@ enum UserRole: String, Codable {
     case regular, caregiver, patient
 }
 
+@MainActor
 final class AppSettings: ObservableObject {
     static let shared = AppSettings()
 
@@ -55,8 +56,6 @@ final class AppSettings: ObservableObject {
     private var isApplyingRemote = false
     private let saveDebounce = PassthroughSubject<Void, Never>()
 
-    private var supabase: SupabaseManager { .shared }
-
     private init() {
         // Profile defaults
         firstName = ""
@@ -67,7 +66,7 @@ final class AppSettings: ObservableObject {
         let savedRole = UserDefaults.standard.string(forKey: "userRole") ?? UserRole.regular.rawValue
         role = UserRole(rawValue: savedRole) ?? .regular
 
-        // Routine defaults (these are used until we load from Supabase)
+        // Routine defaults (used until we load from the backend)
         breakfast = DateComponents(hour: 8,  minute: 0)
         lunch     = DateComponents(hour: 13, minute: 0)
         dinner    = DateComponents(hour: 19, minute: 0)
@@ -86,7 +85,7 @@ final class AppSettings: ObservableObject {
         saveDebounce
             .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
             .sink { [weak self] in
-                Task { [weak self] in await self?.saveRoutineToSupabase() }
+                Task { [weak self] in await self?.saveRoutineToBackend() }
             }
             .store(in: &cancellables)
 
@@ -116,73 +115,49 @@ final class AppSettings: ObservableObject {
         onboardingCompleted = false
     }
 
-    // MARK: - Supabase sync
+    // MARK: - Backend sync
 
-    /// Call after sign-in (or app start if already signed in) to pull routine from Postgres.
+    /// Call after sign-in (or app start if already signed in) to pull the routine and profile from the backend.
     @MainActor
-    func loadRoutineFromSupabase() async {
-        guard let uid = supabase.currentUserID else { return }
-
+    func loadRoutineFromBackend() async {
         do {
-            struct UserRow: Decodable {
-                let breakfast_time: String?
-                let lunch_time: String?
-                let dinner_time: String?
-                let bedtime: String?
-                let wakeup_time: String?
-                let first_name: String?
-                let last_name: String?
-                let role: String?
-            }
-
-            let rows: [UserRow] = try await supabase.client
-                .from("users")
-                .select("breakfast_time, lunch_time, dinner_time, bedtime, wakeup_time, first_name, last_name, role")
-                .eq("id", value: uid.uuidString)
-                .limit(1)
-                .execute()
-                .value
-
-            guard let row = rows.first else { return }
+            async let userTask = ProfileRepository.shared.fetchCurrentUser()
+            async let routineTask = ProfileRepository.shared.fetchRoutine()
+            let (user, routine) = try await (userTask, routineTask)
 
             isApplyingRemote = true
-            breakfast = parseTime(row.breakfast_time, defaultHour: 8)
-            lunch     = parseTime(row.lunch_time,     defaultHour: 13)
-            dinner    = parseTime(row.dinner_time,     defaultHour: 19)
-            bedtime   = parseTime(row.bedtime,         defaultHour: 23)
-            wakeup    = parseTime(row.wakeup_time,     defaultHour: 7)
+            breakfast = parseTime(routine.breakfastTime, defaultHour: 8)
+            lunch     = parseTime(routine.lunchTime, defaultHour: 13)
+            dinner    = parseTime(routine.dinnerTime, defaultHour: 19)
+            bedtime   = parseTime(routine.bedtime, defaultHour: 23)
+            wakeup    = parseTime(routine.wakeupTime, defaultHour: 7)
 
-            if let fn = row.first_name { firstName = fn }
-            if let ln = row.last_name  { lastName = ln }
-            if let r = row.role { role = UserRole(rawValue: r) ?? .regular }
+            firstName = user.firstName ?? ""
+            lastName = user.lastName ?? ""
+            dateOfBirth = APIFormatters.parseDate(user.dateOfBirth)
+            role = UserRole(rawValue: user.role) ?? .regular
 
             isApplyingRemote = false
         } catch {
-            print("⚠️ loadRoutineFromSupabase failed:", error.localizedDescription)
+            print("⚠️ loadRoutineFromBackend failed:", error.localizedDescription)
             isApplyingRemote = false
         }
     }
 
     /// Debounced writer used whenever the user edits routine fields locally.
-    func saveRoutineToSupabase() async {
-        guard let uid = supabase.currentUserID else { return }
-
-        let data: [String: String] = [
-            "breakfast_time": formatTime(breakfast, defaultHour: 8),
-            "lunch_time":     formatTime(lunch,     defaultHour: 13),
-            "dinner_time":    formatTime(dinner,    defaultHour: 19),
-            "bedtime":        formatTime(bedtime,   defaultHour: 23),
-            "wakeup_time":    formatTime(wakeup,    defaultHour: 7)
-        ]
-
+    func saveRoutineToBackend() async {
         do {
-            try await supabase.client
-                .from("users")
-                .update(data)
-                .eq("id", value: uid.uuidString)
-                .execute()
+            _ = try await ProfileRepository.shared.updateRoutine(
+                APIRoutineUpdateRequest(
+                    breakfastTime: formatTime(breakfast, defaultHour: 8),
+                    lunchTime: formatTime(lunch, defaultHour: 13),
+                    dinnerTime: formatTime(dinner, defaultHour: 19),
+                    bedtime: formatTime(bedtime, defaultHour: 23),
+                    wakeupTime: formatTime(wakeup, defaultHour: 7)
+                )
+            )
         } catch {
-            print("⚠️ saveRoutineToSupabase failed:", error.localizedDescription)
+            print("⚠️ saveRoutineToBackend failed:", error.localizedDescription)
         }
     }
 

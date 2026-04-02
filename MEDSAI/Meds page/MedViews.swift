@@ -1,7 +1,7 @@
 import SwiftUI
 import PhotosUI
 
-// MARK: - Local model (Postgres-backed via Supabase)
+// MARK: - Local model (backend-backed)
 struct LocalMed: Identifiable, Hashable {
     let id: String
     var name: String
@@ -44,94 +44,49 @@ struct LocalMed: Identifiable, Hashable {
         self.kbKey = kbKey
     }
 
-    /// Decode from Supabase row
-    struct DBRow: Decodable {
-        let id: String
-        let dosage: String
-        let frequency_per_day: Int
-        let frequency_hours: Int?
-        let start_date: String?
-        let end_date: String?
-        let notes: String?
-        let is_active: Bool
-        let medication_id: String?
-        // Joined medication name
-        struct MedRef: Decodable { let name: String; let food_rule: String? }
-        let medications: MedRef?
-    }
-
-    init?(row: DBRow) {
-        self.id = row.id
-        self.dosage = row.dosage
-        self.frequencyPerDay = row.frequency_per_day
-        self.minIntervalHours = row.frequency_hours
-        self.notes = row.notes
-        self.isArchived = !row.is_active
-        self.name = row.medications?.name ?? "Unknown"
-        self.kbKey = row.medication_id
-
-        let df = ISO8601DateFormatter()
-        df.formatOptions = [.withFullDate]
-        self.startDate = df.date(from: row.start_date ?? "") ?? Date()
-        self.endDate = df.date(from: row.end_date ?? "") ?? Calendar.current.date(byAdding: .day, value: 14, to: Date())!
-
-        let frRaw = row.medications?.food_rule ?? FoodRule.none.rawValue
-        self.foodRule = FoodRule(rawValue: frRaw) ?? .none
-        self.ingredients = nil
+    init?(api: APIUserMedication) {
+        self.id = api.id
+        self.dosage = api.dosage
+        self.frequencyPerDay = api.frequencyPerDay
+        self.minIntervalHours = api.frequencyHours ?? api.minIntervalHours
+        self.notes = api.notes
+        self.isArchived = !api.isActive
+        self.name = api.name
+        self.kbKey = api.medicationID
+        self.startDate = APIFormatters.parseDate(api.startDate) ?? Date()
+        self.endDate = APIFormatters.parseDate(api.endDate) ?? Calendar.current.date(byAdding: .day, value: 14, to: Date())!
+        switch api.foodRule {
+        case "before_food":
+            self.foodRule = .beforeFood
+        case "after_food":
+            self.foodRule = .afterFood
+        default:
+            self.foodRule = .none
+        }
+        self.ingredients = api.activeIngredients
     }
 }
 
-// MARK: - Repo (per-user, Supabase-backed)
+// MARK: - Repo (per-user, backend-backed)
 @MainActor
 final class UserMedsRepo: ObservableObject {
-    private struct UserMedicationUpsertPayload: Encodable {
-        let id: String
-        let user_id: String
-        let medication_id: String
-        let dosage: String
-        let frequency_per_day: Int
-        let frequency_hours: Int?
-        let start_date: String
-        let end_date: String
-        let notes: String?
-        let is_active: Bool
-    }
-
-    private struct ArchivePayload: Encodable {
-        let is_active: Bool
-    }
-
-    private struct MedicationInsertPayload: Encodable {
-        let id: String
-        let name: String
-        let food_rule: String
-    }
-
     @Published private(set) var meds: [LocalMed] = []
     @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var isSignedIn = false
 
-    private var supabase: SupabaseManager { .shared }
-
     func start() {
-        isSignedIn = supabase.currentUserID != nil
+        isSignedIn = SessionStore.shared.currentUserID != nil
         guard isSignedIn else { meds = []; errorMessage = nil; return }
         Task { await fetchMeds() }
     }
 
     func fetchMeds() async {
-        guard let uid = supabase.currentUserID else { return }
+        guard SessionStore.shared.currentUserID != nil else { return }
         isLoading = true; errorMessage = nil
         do {
-            let rows: [LocalMed.DBRow] = try await supabase.client
-                .from("user_medications")
-                .select("*, medications(name, food_rule)")
-                .eq("user_id", value: uid.uuidString)
-                .eq("is_active", value: true)
-                .execute()
-                .value
-            self.meds = rows.compactMap { LocalMed(row: $0) }
+            let rows: [APIUserMedication] = try await BackendClient.shared.request("/user-medications")
+            self.meds = rows.compactMap { LocalMed(api: $0) }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -141,31 +96,20 @@ final class UserMedsRepo: ObservableObject {
     // MARK: - CRUD
 
     func add(_ med: LocalMed) async {
-        guard let uid = supabase.currentUserID else { return }
+        guard SessionStore.shared.currentUserID != nil else { return }
         do {
-            // Ensure the medication exists in the global catalog first
-            let medId = try await ensureMedicationExists(name: med.name, foodRule: med.foodRule)
-
-            let isoFmt = ISO8601DateFormatter()
-            isoFmt.formatOptions = [.withFullDate]
-
-            let row = UserMedicationUpsertPayload(
-                id: med.id,
-                user_id: uid.uuidString,
-                medication_id: medId,
+            let row = APIUserMedicationRequest(
+                name: med.name,
                 dosage: med.dosage,
-                frequency_per_day: med.frequencyPerDay,
-                frequency_hours: med.minIntervalHours,
-                start_date: isoFmt.string(from: med.startDate),
-                end_date: isoFmt.string(from: med.endDate),
+                frequencyPerDay: med.frequencyPerDay,
+                frequencyHours: med.minIntervalHours,
+                startDate: APIFormatters.fullDate.string(from: med.startDate),
+                endDate: APIFormatters.fullDate.string(from: med.endDate),
                 notes: normalizedNotes(med.notes),
-                is_active: true
+                foodRule: foodRuleValue(med.foodRule)
             )
 
-            try await supabase.client
-                .from("user_medications")
-                .upsert(row)
-                .execute()
+            let _: APIUserMedication = try await BackendClient.shared.request("/user-medications", method: .post, body: row)
 
             await fetchMeds()
         } catch {
@@ -173,15 +117,32 @@ final class UserMedsRepo: ObservableObject {
         }
     }
 
-    func update(_ med: LocalMed) async { await add(med) }
+    func update(_ med: LocalMed) async {
+        do {
+            let row = APIUserMedicationRequest(
+                name: med.name,
+                dosage: med.dosage,
+                frequencyPerDay: med.frequencyPerDay,
+                frequencyHours: med.minIntervalHours,
+                startDate: APIFormatters.fullDate.string(from: med.startDate),
+                endDate: APIFormatters.fullDate.string(from: med.endDate),
+                notes: normalizedNotes(med.notes),
+                foodRule: foodRuleValue(med.foodRule)
+            )
+            let _: APIUserMedication = try await BackendClient.shared.request(
+                "/user-medications/\(med.id)",
+                method: .put,
+                body: row
+            )
+            await fetchMeds()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
 
     func delete(_ med: LocalMed) async {
         do {
-            try await supabase.client
-                .from("user_medications")
-                .delete()
-                .eq("id", value: med.id)
-                .execute()
+            let _: APIMessageResponse = try await BackendClient.shared.request("/user-medications/\(med.id)", method: .delete)
             await fetchMeds()
         } catch {
             errorMessage = error.localizedDescription
@@ -190,53 +151,29 @@ final class UserMedsRepo: ObservableObject {
 
     func setArchived(_ med: LocalMed, archived: Bool) async {
         do {
-            try await supabase.client
-                .from("user_medications")
-                .update(ArchivePayload(is_active: !archived))
-                .eq("id", value: med.id)
-                .execute()
+            let _: APIMessageResponse = try await BackendClient.shared.request(
+                "/user-medications/\(med.id)/archive",
+                method: .patch,
+                body: APIArchiveMedicationRequest(archived: archived)
+            )
             await fetchMeds()
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    // MARK: - Helpers
-
-    /// Ensures a medication exists in the global `medications` table and returns its UUID.
-    private func ensureMedicationExists(name: String, foodRule: FoodRule) async throws -> String {
-        struct MedRow: Decodable { let id: String }
-
-        // Try to find existing
-        let existing: [MedRow] = try await supabase.client
-            .from("medications")
-            .select("id")
-            .eq("name", value: name)
-            .execute()
-            .value
-
-        if let first = existing.first { return first.id }
-
-        // Insert new
-        let newId = UUID().uuidString
-        try await supabase.client
-            .from("medications")
-            .insert(
-                MedicationInsertPayload(
-                    id: newId,
-                    name: name,
-                    food_rule: foodRule.rawValue
-                )
-            )
-            .execute()
-
-        return newId
-    }
-
     private func normalizedNotes(_ notes: String?) -> String? {
         guard let notes else { return nil }
         let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func foodRuleValue(_ rule: FoodRule) -> String {
+        switch rule {
+        case .beforeFood: return "before_food"
+        case .afterFood: return "after_food"
+        case .none: return "none"
+        }
     }
 }
 
@@ -779,41 +716,7 @@ struct MedDetailView: View {
     }
 
     private func loadFromCatalog(nameOrKey: String) async -> DrugPayload? {
-        // Try to load from the Postgres medications table
-        struct CatalogRow: Decodable {
-            let name: String
-            let how_to_use: String?
-            let side_effects: [String]?
-            let contraindications: [String]?
-            let food_rule: String?
-            let min_interval_hours: Int?
-            let active_ingredients: [String]?
-        }
-        do {
-            let rows: [CatalogRow] = try await SupabaseManager.shared.client
-                .from("medications")
-                .select()
-                .eq("name", value: nameOrKey)
-                .limit(1)
-                .execute()
-                .value
-            guard let row = rows.first else { return nil }
-            return DrugPayload(
-                title: row.name,
-                strengths: [],
-                dosageForms: [],
-                foodRule: row.food_rule,
-                minIntervalHours: row.min_interval_hours,
-                ingredients: row.active_ingredients ?? [],
-                indications: [],
-                howToTake: row.how_to_use.map { [$0] } ?? [],
-                commonSideEffects: row.side_effects ?? [],
-                importantWarnings: [],
-                interactionsToAvoid: row.contraindications ?? [],
-                references: nil,
-                kbKey: nil
-            )
-        } catch { return nil }
+        (try? await MedCatalogRepo.shared.fetch(name: nameOrKey))?.payload
     }
 
     private func load() async {

@@ -1,0 +1,24 @@
+{
+  "name": "istseh-medsai",
+  "version": "1.0.0",
+  "description": "Task runner for quick setup and local development without Docker.",
+  "scripts": {
+    "setup": "npm run setup:backend",
+    "setup:backend": "cd backend && python3 -m venv .venv && .venv/bin/pip install -e . && .venv/bin/pip install pytest pytest-asyncio",
+    "dev": "npm run dev:backend",
+    "dev:backend": "cd backend && .venv/bin/uvicorn app.main:app --reload --host 127.0.0.1 --port 8000",
+    "db:upgrade": "cd backend && .venv/bin/alembic upgrade head",
+    "db:migrate": "cd backend && .venv/bin/alembic revision --autogenerate -m 'New migration'",
+    "test": "cd backend && .venv/bin/pytest",
+    "uv:setup": "cd backend && uv venv && uv sync",
+    "uv:dev": "cd backend && uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000",
+    "uv:db:upgrade": "cd backend && uv run alembic upgrade head"
+  },
+  "keywords": [
+    "backend",
+    "fastapi",
+    "medsai"
+  ],
+  "author": "Osama",
+  "license": "ISC"
+}

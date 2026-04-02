@@ -32,8 +32,6 @@ struct LoginPageView: View {
     private var passwordOK: Bool { isStrongPassword(password) }
     private var isValid: Bool { emailOK && passwordOK }
     
-    private var supabase: SupabaseManager { .shared }
-    
     var body: some View {
         VStack(spacing: 32) {
             VStack(spacing: 12) {
@@ -142,19 +140,15 @@ struct LoginPageView: View {
         let emailTrimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
         
         do {
-            try await supabase.client.auth.signIn(
-                email: emailTrimmed,
-                password: password
-            )
-            
-            // Update app state
+            let user = try await AuthRepository.shared.login(email: emailTrimmed, password: password)
+
             await MainActor.run {
+                settings.role = UserRole(rawValue: user.role) ?? .regular
                 settings.didChooseEntry = true
                 settings.onboardingCompleted = true
             }
-            
-            // Load user routine from Postgres
-            await settings.loadRoutineFromSupabase()
+
+            await settings.loadRoutineFromBackend()
         } catch {
             await MainActor.run {
                 alertMessage = error.localizedDescription
@@ -169,8 +163,8 @@ struct LoginPageView: View {
         guard emailOK else { return }
         let emailTrimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            try await supabase.client.auth.resetPasswordForEmail(emailTrimmed)
-            alertMessage = "Password reset email sent."
+            let response = try await AuthRepository.shared.requestPasswordReset(email: emailTrimmed)
+            alertMessage = response.message
         } catch {
             alertMessage = error.localizedDescription
         }

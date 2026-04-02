@@ -30,8 +30,6 @@ struct SettingsView: View {
     @AppStorage("appearance.language") private var languageCode: String =
         Locale.current.language.languageCode?.identifier ?? "en"
 
-    private var supabase: SupabaseManager { .shared }
-
     var body: some View {
         NavigationStack {
             List {
@@ -47,11 +45,12 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .tint(.green)
             .onAppear {
-                Task { await hydrateNamesFromSupabase() }
+                Task { await hydrateProfileFromBackend() }
                 Task { await ensureNotificationAuthIfEnabled() }
             }
-            .onChange(of: firstName) { _, _ in Task { await persistNames() } }
-            .onChange(of: lastName)  { _, _ in Task { await persistNames() } }
+            .onChange(of: firstName) { _, _ in Task { await persistProfile() } }
+            .onChange(of: lastName)  { _, _ in Task { await persistProfile() } }
+            .onChange(of: dobISO)    { _, _ in Task { await persistProfile() } }
         }
         .safeAreaPadding(.bottom)
     }
@@ -233,43 +232,32 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Name hydration & persistence (Supabase)
+    // MARK: - Profile hydration & persistence
 
-    private func hydrateNamesFromSupabase() async {
-        guard firstName.isEmpty || lastName.isEmpty,
-              let uid = supabase.currentUserID else { return }
+    private func hydrateProfileFromBackend() async {
         do {
-            struct Row: Decodable { let first_name: String?; let last_name: String? }
-            let rows: [Row] = try await supabase.client
-                .from("users")
-                .select("first_name, last_name")
-                .eq("id", value: uid.uuidString)
-                .limit(1)
-                .execute()
-                .value
-            if let row = rows.first {
-                if firstName.isEmpty, let fn = row.first_name, !fn.isEmpty { firstName = fn }
-                if lastName.isEmpty,  let ln = row.last_name,  !ln.isEmpty { lastName  = ln }
+            let user = try await ProfileRepository.shared.fetchCurrentUser()
+            if firstName.isEmpty, let fn = user.firstName, !fn.isEmpty { firstName = fn }
+            if lastName.isEmpty, let ln = user.lastName, !ln.isEmpty { lastName = ln }
+            if dobISO.isEmpty, let dob = user.dateOfBirth {
+                dobISO = dob
             }
         } catch {
             // Ignore silently; app still works
         }
     }
 
-    private func persistNames() async {
-        guard let uid = supabase.currentUserID else { return }
+    private func persistProfile() async {
         let trimmedFirst = firstName.trimmingCharacters(in: .whitespaces)
-        let trimmedLast  = lastName.trimmingCharacters(in: .whitespaces)
+        let trimmedLast = lastName.trimmingCharacters(in: .whitespaces)
 
         do {
-            try await supabase.client
-                .from("users")
-                .update([
-                    "first_name": trimmedFirst,
-                    "last_name": trimmedLast
-                ])
-                .eq("id", value: uid.uuidString)
-                .execute()
+            _ = try await ProfileRepository.shared.updateProfile(
+                firstName: trimmedFirst,
+                lastName: trimmedLast,
+                phoneNumber: nil,
+                dateOfBirth: dobFromISO(dobISO)
+            )
         } catch {
             // Ignore write errors for now
         }
@@ -278,15 +266,16 @@ struct SettingsView: View {
     // MARK: - Helpers
 
     private func currentEmail() -> String {
-        supabase.client.auth.currentSession?.user.email ?? "Not available"
+        SessionStore.shared.currentEmail ?? "Not available"
     }
 
     private func signOut() {
         Task {
-            try? await supabase.client.auth.signOut()
+            await AuthRepository.shared.logout()
             await MainActor.run {
                 settings.didChooseEntry = false
                 settings.onboardingCompleted = false
+                settings.role = .regular
             }
         }
     }

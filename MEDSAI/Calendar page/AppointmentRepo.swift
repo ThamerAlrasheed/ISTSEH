@@ -1,30 +1,13 @@
 import Foundation
 import Combine
 
-/// Supabase-backed repo for user appointments from the `appointments` table.
+/// Backend-backed repo for user appointments.
 final class AppointmentsRepo: ObservableObject {
-    private struct AppointmentInsertPayload: Encodable {
-        let user_id: String
-        let title: String
-        let doctor_name: String
-        let appointment_time: String
-        let notes: String?
-    }
-
-    private struct AppointmentUpdatePayload: Encodable {
-        let title: String
-        let doctor_name: String
-        let appointment_time: String
-        let notes: String?
-    }
-
     @Published private(set) var items: [Appointment] = []
     @Published private(set) var isLoading: Bool = false
     @Published private(set) var errorMessage: String? = nil
 
-    private var supabase: SupabaseManager { .shared }
-
-    var isSignedIn: Bool { supabase.currentUserID != nil }
+    var isSignedIn: Bool { SessionStore.shared.currentUserID != nil }
 
     func start() {
         guard isSignedIn else { items = []; return }
@@ -33,16 +16,10 @@ final class AppointmentsRepo: ObservableObject {
 
     @MainActor
     func fetchAppointments() async {
-        guard let uid = supabase.currentUserID else { return }
+        guard SessionStore.shared.currentUserID != nil else { return }
         isLoading = true; errorMessage = nil
         do {
-            let rows: [AppointmentRow] = try await supabase.client
-                .from("appointments")
-                .select()
-                .eq("user_id", value: uid.uuidString)
-                .order("appointment_time")
-                .execute()
-                .value
+            let rows: [APIAppointment] = try await BackendClient.shared.request("/appointments")
             self.items = rows.map { $0.toAppointment() }
         } catch {
             errorMessage = error.localizedDescription
@@ -56,23 +33,19 @@ final class AppointmentsRepo: ObservableObject {
     }
 
     func add(title: String, type: AppointmentType, date: Date, location: String?, notes: String?, completion: ((Error?) -> Void)? = nil) {
-        guard let uid = supabase.currentUserID else {
+        guard SessionStore.shared.currentUserID != nil else {
             completion?(NSError(domain: "AppointmentsRepo", code: -1, userInfo: [NSLocalizedDescriptionKey: "Not signed in"]))
             return
         }
         Task {
             do {
-                let row = AppointmentInsertPayload(
-                    user_id: uid.uuidString,
+                let row = APIAppointmentRequest(
                     title: title,
-                    doctor_name: type.rawValue,
-                    appointment_time: ISO8601DateFormatter().string(from: date),
+                    doctorName: type.rawValue,
+                    appointmentTime: APIFormatters.isoDateTime.string(from: date),
                     notes: normalizedNotes(notes)
                 )
-                try await supabase.client
-                    .from("appointments")
-                    .insert(row)
-                    .execute()
+                let _: APIAppointment = try await BackendClient.shared.request("/appointments", method: .post, body: row)
                 await fetchAppointments()
                 completion?(nil)
             } catch {
@@ -84,17 +57,13 @@ final class AppointmentsRepo: ObservableObject {
     func update(id: String, title: String, type: AppointmentType, date: Date, location: String?, notes: String?, completion: ((Error?) -> Void)? = nil) {
         Task {
             do {
-                let data = AppointmentUpdatePayload(
+                let data = APIAppointmentRequest(
                     title: title,
-                    doctor_name: type.rawValue,
-                    appointment_time: ISO8601DateFormatter().string(from: date),
+                    doctorName: type.rawValue,
+                    appointmentTime: APIFormatters.isoDateTime.string(from: date),
                     notes: normalizedNotes(notes)
                 )
-                try await supabase.client
-                    .from("appointments")
-                    .update(data)
-                    .eq("id", value: id)
-                    .execute()
+                let _: APIAppointment = try await BackendClient.shared.request("/appointments/\(id)", method: .put, body: data)
                 await fetchAppointments()
                 completion?(nil)
             } catch {
@@ -106,11 +75,7 @@ final class AppointmentsRepo: ObservableObject {
     @MainActor
     func delete(_ appointment: Appointment) async {
         do {
-            try await supabase.client
-                .from("appointments")
-                .delete()
-                .eq("id", value: appointment.id)
-                .execute()
+            let _: APIMessageResponse = try await BackendClient.shared.request("/appointments/\(appointment.id)", method: .delete)
             await fetchAppointments()
         } catch {
             self.errorMessage = error.localizedDescription
@@ -126,16 +91,10 @@ final class AppointmentsRepo: ObservableObject {
 
 // MARK: - DB Row Decodable
 
-private struct AppointmentRow: Decodable {
-    let id: String
-    let title: String
-    let doctor_name: String?
-    let appointment_time: String
-    let notes: String?
-
+private extension APIAppointment {
     func toAppointment() -> Appointment {
-        let type = AppointmentType.fromString(doctor_name)
-        let date = ISO8601DateFormatter().date(from: appointment_time) ?? Date()
+        let type = AppointmentType.fromString(doctorName)
+        let date = APIFormatters.parseDateTime(appointmentTime) ?? Date()
         let n = (notes?.isEmpty == true) ? nil : notes
         return Appointment(id: id, title: title, type: type, date: date, location: nil, notes: n)
     }

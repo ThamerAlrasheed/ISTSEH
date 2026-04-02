@@ -15,9 +15,9 @@ struct RootView: View {
     }
 
     private var shouldShowMainApp: Bool {
-        // Regular/caregiver users: require Supabase Auth session
+        // Regular/caregiver users: require backend JWT session
         // Patient users: require device token (passwordless)
         guard settings.onboardingCompleted && settings.didChooseEntry else { return false }
-        return SupabaseManager.shared.currentUserID != nil
+        return SessionStore.shared.currentUserID != nil
     }
 }

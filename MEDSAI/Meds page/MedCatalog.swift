@@ -23,19 +23,10 @@ struct MedCatalogEntry: Codable, Identifiable {
     }
 }
 
-// MARK: - Repo for global medications catalog (Supabase-backed)
+// MARK: - Repo for global medications catalog (backend-backed)
 final class MedCatalogRepo {
-    private struct MedicationInsertPayload: Encodable {
-        let name: String
-        let how_to_use: String?
-        let food_rule: String
-        let min_interval_hours: Int?
-    }
-
     static let shared = MedCatalogRepo()
     private init() {}
-
-    private var supabase: SupabaseManager { .shared }
 
     /// Normalize user input to a stable key
     func normalizeKey(_ raw: String) -> String {
@@ -46,39 +37,26 @@ final class MedCatalogRepo {
 
     /// Read by name if present
     func fetch(name: String) async throws -> MedCatalogEntry? {
-        struct Row: Decodable {
-            let id: String
-            let name: String
-            let how_to_use: String?
-            let side_effects: [String]?
-            let contraindications: [String]?
-            let food_rule: String?
-            let min_interval_hours: Int?
-            let active_ingredients: [String]?
+        let encodedName = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        let row: APIMedicationCatalogEntry
+        do {
+            row = try await BackendClient.shared.request("/medications/catalog/\(encodedName)")
+        } catch {
+            return nil
         }
-
-        let rows: [Row] = try await supabase.client
-            .from("medications")
-            .select()
-            .eq("name", value: name)
-            .limit(1)
-            .execute()
-            .value
-
-        guard let row = rows.first else { return nil }
 
         let payload = DrugPayload(
             title: row.name,
             strengths: [],
             dosageForms: [],
-            foodRule: row.food_rule,
-            minIntervalHours: row.min_interval_hours,
-            ingredients: row.active_ingredients ?? [],
+            foodRule: row.foodRule,
+            minIntervalHours: row.minIntervalHours,
+            ingredients: row.activeIngredients,
             indications: [],
-            howToTake: row.how_to_use.map { [$0] } ?? [],
-            commonSideEffects: row.side_effects ?? [],
+            howToTake: row.howToUse.map { [$0] } ?? [],
+            commonSideEffects: row.sideEffects,
             importantWarnings: [],
-            interactionsToAvoid: row.contraindications ?? [],
+            interactionsToAvoid: row.contraindications,
             references: nil,
             kbKey: nil
         )
@@ -93,34 +71,8 @@ final class MedCatalogRepo {
     /// Upsert from payload + original name
     func upsert(from payload: DrugPayload, searchedName: String, imageURL: URL? = nil) async throws -> MedCatalogEntry {
         let display = payload.title.isEmpty ? searchedName : payload.title
-
-        // Try to find existing
-        struct ExistingRow: Decodable { let id: String; let name: String }
-        let existing: [ExistingRow] = try await supabase.client
-            .from("medications")
-            .select("id, name")
-            .eq("name", value: display)
-            .limit(1)
-            .execute()
-            .value
-
-        if existing.isEmpty {
-            let instructions = payload.howToTake
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-                .joined(separator: "\n")
-
-            try await supabase.client
-                .from("medications")
-                .insert(
-                    MedicationInsertPayload(
-                        name: display,
-                        how_to_use: instructions.isEmpty ? nil : instructions,
-                        food_rule: payload.foodRule ?? "none",
-                        min_interval_hours: payload.minIntervalHours
-                    )
-                )
-                .execute()
+        if let existing = try await fetch(name: display) {
+            return existing
         }
 
         return MedCatalogEntry(

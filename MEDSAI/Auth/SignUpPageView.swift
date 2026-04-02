@@ -1,5 +1,4 @@
 import SwiftUI
-import Supabase
 
 struct SignUpPageView: View {
     private struct UserProfileUpsertPayload: Encodable {
@@ -42,8 +41,6 @@ struct SignUpPageView: View {
     // UX
     @State private var busy = false
     @State private var errorText: String?
-
-    private var supabase: SupabaseManager { .shared }
 
     // MARK: - Validators
     private var emailValid: Bool {
@@ -250,7 +247,7 @@ struct SignUpPageView: View {
         }
     }
 
-    /// Final step: create Supabase Auth user, then write profile to Postgres.
+    /// Final step: create backend account and profile.
     private func finish() async {
         guard canFinish else { return }
         busy = true
@@ -259,43 +256,23 @@ struct SignUpPageView: View {
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
 
         do {
-            // 1) Create Auth user via Supabase
-            let authResponse = try await supabase.client.auth.signUp(
+            let user = try await AuthRepository.shared.register(
                 email: trimmedEmail,
-                password: password
-            )
-
-            guard let userId = authResponse.session?.user.id else {
-                errorText = "Account created but session unavailable. Please log in."
-                return
-            }
-
-            // 3) Insert profile into the users table
-            let isoFormatter = ISO8601DateFormatter()
-            isoFormatter.formatOptions = [.withFullDate]
-
-            let profile = UserProfileUpsertPayload(
-                id: userId.uuidString,
-                email: trimmedEmail,
-                first_name: firstName.trimmingCharacters(in: .whitespacesAndNewlines),
-                last_name: lastName.trimmingCharacters(in: .whitespacesAndNewlines),
-                phone_number: phoneNumber.trimmingCharacters(in: .whitespacesAndNewlines),
-                date_of_birth: isoFormatter.string(from: dateOfBirth),
+                password: password,
+                firstName: firstName,
+                lastName: lastName,
+                phoneNumber: phoneNumber,
+                dateOfBirth: dateOfBirth,
                 allergies: allergyList,
                 conditions: conditionList
             )
 
-            try await supabase.client
-                .from("users")
-                .upsert(profile)
-                .execute()
-
-            // 4) Update app state so RootView transitions to the main app
             await MainActor.run {
+                settings.role = UserRole(rawValue: user.role) ?? .regular
                 settings.didChooseEntry = true
                 settings.onboardingCompleted = true
             }
-            await settings.loadRoutineFromSupabase()
+            await settings.loadRoutineFromBackend()
         } catch {
             errorText = "Couldn't create account: \(error.localizedDescription)"
         }

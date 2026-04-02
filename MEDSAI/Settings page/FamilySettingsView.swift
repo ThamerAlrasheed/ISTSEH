@@ -1,5 +1,4 @@
 import SwiftUI
-import Supabase
 
 struct FamilySettingsView: View {
     @EnvironmentObject var settings: AppSettings
@@ -12,8 +11,6 @@ struct FamilySettingsView: View {
         let firstName: String
         let lastName: String
     }
-
-    private var supabase: SupabaseManager { .shared }
 
     var body: some View {
         List {
@@ -70,32 +67,17 @@ struct FamilySettingsView: View {
     }
     
     private func loadPatients() async {
-        guard let uid = supabase.currentUserID else { return }
         isLoading = true
         defer { isLoading = false }
 
-        struct RelationRow: Decodable {
-            let patient_id: String
-            struct UserRef: Decodable {
-                let first_name: String?
-                let last_name: String?
-            }
-            let users: UserRef? // joined from patient_id
-        }
-
         do {
-            let rows: [RelationRow] = try await supabase.client
-                .from("caregiver_relations")
-                .select("patient_id, users!caregiver_relations_patient_id_fkey(first_name, last_name)")
-                .eq("caregiver_id", value: uid.uuidString)
-                .execute()
-                .value
+            let rows = try await FamilyRepository.shared.listPatients()
 
             patients = rows.map {
                 PatientProfile(
-                    id: $0.patient_id,
-                    firstName: $0.users?.first_name ?? "",
-                    lastName: $0.users?.last_name ?? ""
+                    id: $0.id,
+                    firstName: $0.firstName ?? "",
+                    lastName: $0.lastName ?? ""
                 )
             }
 
@@ -120,8 +102,6 @@ struct AddFamilyMemberView: View {
     @State private var errorText: String?
     
     var onSave: (String) -> Void
-
-    private var supabase: SupabaseManager { .shared }
     
     var body: some View {
         NavigationStack {
@@ -207,18 +187,12 @@ struct AddFamilyMemberView: View {
     }
     
     private func generateCode() async {
-        guard supabase.client.auth.currentSession?.user.id != nil else {
-            await MainActor.run {
-                errorText = "You must be signed in with a caregiver account to create a family member."
-            }
-            return
-        }
         isSaving = true
         errorText = nil
         defer { isSaving = false }
 
         do {
-            let response = try await supabase.createFamilyMember(
+            let response = try await FamilyRepository.shared.createFamilyMember(
                 firstName: firstName,
                 lastName: lastName,
                 dateOfBirth: dob,
@@ -240,8 +214,8 @@ struct AddFamilyMemberView: View {
 
     private func friendlyErrorMessage(for error: Error) -> String {
         let message = error.localizedDescription.lowercased()
-        if message.contains("non-2xx status code: 404") || message.contains("function") && message.contains("not found") {
-            return "The family-member backend function is not deployed yet."
+        if message.contains("not deployed") || message.contains("404") {
+            return "The family-member backend endpoint is not available."
         }
         return error.localizedDescription
     }

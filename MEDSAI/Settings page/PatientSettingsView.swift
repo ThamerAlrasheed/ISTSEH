@@ -57,22 +57,12 @@ struct PatientSettingsView: View {
     }
     
     private func disconnect() {
-        // Clear session
-        UserDefaults.standard.removeObject(forKey: "deviceToken")
-        UserDefaults.standard.removeObject(forKey: "patientUserId")
-        UserDefaults.standard.removeObject(forKey: "userRole")
-        
-        // Reset app state
-        settings.role = .regular
-        settings.onboardingCompleted = false
-        settings.didChooseEntry = false
-        
-        // Any other cleanup
         Task {
-            do {
-                try await SupabaseManager.shared.client.auth.signOut()
-            } catch {
-                print("⚠️ Sign out failed:", error.localizedDescription)
+            await AuthRepository.shared.logout()
+            await MainActor.run {
+                settings.role = .regular
+                settings.onboardingCompleted = false
+                settings.didChooseEntry = false
             }
         }
     }

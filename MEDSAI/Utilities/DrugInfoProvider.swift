@@ -38,27 +38,14 @@ private struct BackendPayload: Codable {
 
 // MARK: - HTTP client
 enum DrugInfo: DrugInfoProvider {
+    private struct DrugIntelRequestBody: Encodable {
+        let name: String?
+        let imageURL: String?
 
-    // ⚠️ Your deployed endpoint
-    private static let endpoint = URL(string: "https://us-central1-istseh.cloudfunctions.net/drugIntel")!
-
-    // Common POST call
-    private static func postJSON(body: [String: Any]) async throws -> Data {
-        var req = URLRequest(url: endpoint)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.timeoutInterval = 20
-
-        req.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
-
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            let status = (resp as? HTTPURLResponse)?.statusCode ?? -1
-            let snippet = String(data: data, encoding: .utf8) ?? ""
-            throw NSError(domain: "DrugInfo", code: status,
-                          userInfo: [NSLocalizedDescriptionKey: "Server error \(status). \(snippet)"])
+        enum CodingKeys: String, CodingKey {
+            case name
+            case imageURL = "image_url"
         }
-        return data
     }
 
     // Map backend → app-facing model (with defaults for missing fields)
@@ -116,26 +103,19 @@ enum DrugInfo: DrugInfoProvider {
 
     // MARK: - Public API
 
-    // NAME → details (Cloud Function first, then openFDA fallback)
+    // NAME → details (backend owns AI lookup + fallback)
     static func fetchDetails(name: String) async throws -> DrugPayload {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw NSError(domain: "DrugInfo", code: -1, userInfo: [NSLocalizedDescriptionKey: "Empty medication name"])
         }
 
-        // 1) Try Cloud Function (GPT) first
-        do {
-            let data = try await postJSON(body: ["name": trimmed])
-            let backend = try JSONDecoder().decode(BackendPayload.self, from: data)
-            return mapToAppModel(backend, fallbackTitle: trimmed)
-        } catch {
-            // 2) Fallback: openFDA label + NDC strengths so user still gets data
-            if let details = try? await OpenFDAService.fetchDetails(forName: trimmed) {
-                let strengths = (try? await OpenFDAService.fetchDosageOptions(forName: trimmed)) ?? []
-                return payloadFromOpenFDA(medName: trimmed, details: details, strengths: strengths)
-            }
-            throw error
-        }
+        let backend: BackendPayload = try await BackendClient.shared.request(
+            "/drug-intel",
+            method: .post,
+            body: DrugIntelRequestBody(name: trimmed, imageURL: nil)
+        )
+        return mapToAppModel(backend, fallbackTitle: trimmed)
     }
 
     // NAME → strength options (reuse the same call)
@@ -146,8 +126,11 @@ enum DrugInfo: DrugInfoProvider {
 
     // IMAGE → details (send image_url to your Cloud Function)
     static func analyzeImage(url: URL) async throws -> DrugPayload {
-        let data = try await postJSON(body: ["image_url": url.absoluteString])
-        let backend = try JSONDecoder().decode(BackendPayload.self, from: data)
+        let backend: BackendPayload = try await BackendClient.shared.request(
+            "/drug-intel",
+            method: .post,
+            body: DrugIntelRequestBody(name: nil, imageURL: url.absoluteString)
+        )
         return mapToAppModel(backend, fallbackTitle: "Medication")
     }
 }

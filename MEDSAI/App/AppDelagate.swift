@@ -6,7 +6,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
 
-        // Supabase initializes lazily via SupabaseManager.shared — no explicit configure needed.
+        // Backend networking initializes lazily via BackendClient/SessionStore.
 
         // Notifications: delegate + categories
         NotificationsManager.shared.configure()
